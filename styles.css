@@ -127,7 +127,7 @@ h1, h2, h3, h4, p { margin: 0; }
   overflow: hidden;
   background: var(--track);
 }
-.meter .seg { display: block; height: 100%; transition: width 0.45s cubic-bezier(.2,.8,.2,1); }
+.meter .seg { display: block; flex: none; min-width: 0; height: 100%; transition: width 0.45s cubic-bezier(.2,.8,.2,1); }
 .meter .seg + .seg { box-shadow: inset 2px 0 0 var(--bg); }
 .seg.p { background: var(--cp); }
 .seg.f { background: var(--cf); }
@@ -542,3 +542,20 @@ input::placeholder { color: var(--hint); opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---------- v2: meals, quick entry, norm ---------- */
+.meal-title { border: 0; background: none; padding: 0; text-align: left; color: inherit; }
+.add-meal {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; min-height: 52px; margin-top: 10px;
+  border: 1.5px dashed var(--track); border-radius: var(--r);
+  background: none; color: var(--link);
+  font-size: 15px; font-weight: 600;
+}
+.add-meal svg { width: 18px; height: 18px; }
+.add-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.add-actions .btn { margin-top: 8px; min-height: 44px; font-size: 14px; padding: 0 10px; }
+.fld.big input { height: 60px; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fld.big em { font-size: 16px; }
+#pf > .seg { margin-top: 14px; }
+#pf .result { padding-top: 4px; }
