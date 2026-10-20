@@ -333,6 +333,36 @@
     });
   }
 
+  /* ---------- home screen shortcut (Bot API 8.0) ---------- */
+  const homeScreen = { status: null };
+  const canAddHome = () => homeScreen.status === 'missed' || homeScreen.status === 'unknown';
+  function checkHome(cb) {
+    if (!ver('8.0') || typeof tg.checkHomeScreenStatus !== 'function') { homeScreen.status = 'unsupported'; return cb && cb(); }
+    let done = false;
+    const finish = (st) => { if (done) return; done = true; homeScreen.status = st || 'unsupported'; if (cb) cb(); };
+    try { tg.checkHomeScreenStatus(finish); } catch (e) { finish('unsupported'); }
+    setTimeout(() => finish(homeScreen.status || 'unsupported'), 3000);
+  }
+  function addHome() {
+    try { tg.addToHomeScreen(); } catch (e) { toast('Не получилось добавить иконку на этом устройстве'); }
+  }
+  if (ver('8.0')) {
+    try {
+      tg.onEvent('homeScreenAdded', () => {
+        homeScreen.status = 'added';
+        haptic.ok();
+        toast('Иконка добавлена на главный экран');
+        if (S.tab === 'diary') render(); else { const c = $('#homeCard'); if (c) c.remove(); }
+      });
+    } catch (e) {}
+  }
+  const homeBanner = () => (canAddHome() && !lsGet('hs_hide') ? `
+    <div class="home-card">
+      <div class="home-text"><b>На главный экран</b><p>Открывай в одно касание, как обычное приложение.</p></div>
+      <button class="btn primary sm" data-act="home-add">Добавить</button>
+      <button class="icon-btn home-x" data-act="home-hide" aria-label="Скрыть">${ICON.close}</button>
+    </div>` : '');
+
   const sheets = [];
   function openSheet({ title, body, cls }) {
     const wrap = document.createElement('div');
@@ -481,6 +511,7 @@
         ${g.def ? `<button class="hint-card" data-act="profile">Сейчас стоит норма 2 000 ккал по умолчанию. <span>Задать свою норму</span></button>` : ''}
       </section>
 
+      ${homeBanner()}
       <section class="meals">${mealsHTML()}</section>
 
       <section class="week card">
@@ -531,6 +562,8 @@
     if (act === 'next') return switchDay(addDays(S.date, 1));
     if (act === 'today') return switchDay(todayStr());
     if (act === 'new-meal') return openMealEdit(null);
+    if (act === 'home-add') return addHome();
+    if (act === 'home-hide') { lsSet('hs_hide', '1'); const c = el.closest('.home-card'); if (c) c.remove(); return; }
     if (act === 'profile') { S.tab = 'profile'; render(); window.scrollTo(0, 0); }
   });
 
@@ -1193,6 +1226,11 @@
         </section>
         <button type="submit" class="btn primary">Сохранить норму</button>
       </form>
+      ${homeScreen.status && homeScreen.status !== 'unsupported' ? `<section class="card" id="homeCard">
+        <h2>Главный экран телефона</h2>
+        <p class="muted">${homeScreen.status === 'added' ? 'Иконка Калорийки уже на главном экране.' : 'Добавь иконку — приложение будет открываться в одно касание, без поиска бота в чатах.'}</p>
+        ${homeScreen.status !== 'added' ? `<button class="btn primary" data-act="home-add">Добавить на главный экран</button>` : ''}
+      </section>` : ''}
       <section class="card my-products">
         <h2>Мои продукты</h2>
         <div id="myList"><p class="muted">Загружаю…</p></div>
@@ -1330,6 +1368,7 @@
     S.entries = parseJSON(v[key], []) || [];
     render();
     ensureMy();
+    checkHome(() => { if (homeScreen.status !== 'unsupported' && S.tab === 'diary' && !sheets.length) render(); });
   }
 
   window.__kbju = { normalizeCode, calcGoals, autoGoals, S };
