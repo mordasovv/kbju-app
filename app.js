@@ -18,10 +18,14 @@
   const r1 = (n) => Math.round((n || 0) * 10) / 10;
   const fmt = (n) => r0(n).toLocaleString('ru-RU');
   const fmt1 = (n) => { const v = r1(n); return (Number.isInteger(v) ? String(v) : v.toFixed(1)).replace('.', ','); };
+  const fmtL = (ml) => String(Math.round((ml || 0) / 10) / 100).replace('.', ',') + ' л';
+  const fmtMl = (ml) => (Math.abs(ml) >= 1000 ? fmtL(ml) : `${r0(ml)} мл`);
   const norm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}%]+/gu, ' ').trim();
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const plural = (n, a, b, c) => { n = Math.abs(n) % 100; const n1 = n % 10; if (n > 10 && n < 20) return c; if (n1 > 1 && n1 < 5) return b; if (n1 === 1) return a; return c; };
   const parseJSON = (s, fb) => { if (!s) return fb; try { return JSON.parse(s); } catch (e) { return fb; } };
+  const capFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trim() + '…' : s);
 
   const haptic = {
     tap() { try { ver('6.1') && tg.HapticFeedback.impactOccurred('light'); } catch (e) {} },
@@ -34,6 +38,7 @@
     left: sv('<path d="M15 5l-7 7 7 7"/>'),
     right: sv('<path d="M9 5l7 7-7 7"/>'),
     plus: sv('<path d="M12 5v14M5 12h14"/>'),
+    minus: sv('<path d="M5 12h14"/>'),
     close: sv('<path d="M6 6l12 12M18 6L6 18"/>'),
     scan: sv('<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 8v8M11 8v8M14 8v8M16.5 8v8" stroke-width="1.6"/>'),
     torch: sv('<path d="M8 3h8l-1 6H9z"/><path d="M9 9h6v11a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1z"/><path d="M12 13v3"/>'),
@@ -41,7 +46,22 @@
     keyboard: sv('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>'),
     trash: sv('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
     search: sv('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
+    repeat: sv('<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>'),
   };
+
+  /* ================= theme: black & white ================= */
+  const THEME = { light: { bg: '#F2F2F2', card: '#FFFFFF' }, dark: { bg: '#000000', card: '#141414' } };
+  function applyTheme() {
+    let scheme = 'light';
+    if (inTG && tg.colorScheme) scheme = tg.colorScheme === 'dark' ? 'dark' : 'light';
+    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) scheme = 'dark';
+    document.documentElement.dataset.theme = scheme;
+    if (!inTG) return;
+    const t = THEME[scheme];
+    try { if (ver('6.9')) tg.setHeaderColor(t.bg); else if (ver('6.1')) tg.setHeaderColor('bg_color'); } catch (e) {}
+    try { if (ver('6.1')) tg.setBackgroundColor(t.bg); } catch (e) {}
+    try { if (ver('7.10')) tg.setBottomBarColor(t.card); } catch (e) {}
+  }
 
   /* ================= storage: Telegram CloudStorage + localStorage ================= */
   const LS = 'kbju:';
@@ -78,7 +98,7 @@
     set(key, value) {
       lsSet(key, value);
       if (!cloud) return Promise.resolve(true);
-      if (value.length > CLOUD_MAX) { toast('Слишком много записей за день для облака — сохранено только на этом устройстве'); return Promise.resolve(false); }
+      if (value.length > CLOUD_MAX) { toast('Слишком много записей для облака — сохранено только на этом устройстве'); return Promise.resolve(false); }
       return new Promise((resolve) => {
         try {
           cloud.setItem(key, value, (err) => {
@@ -106,7 +126,6 @@
         try { cloud.getKeys((err, ks) => resolve(err ? local : (ks || []))); } catch (e) { resolve(local); }
       });
     },
-    async getJSON(key, fb) { return parseJSON(await this.get(key), fb); },
     setJSON(key, obj) { return this.set(key, JSON.stringify(obj)); },
   };
 
@@ -124,26 +143,10 @@
     if (s === addDays(t, 1)) return 'Завтра';
     return parseD(s).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
   };
+  const shortDate = (s) => parseD(s).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
 
   /* ================= domain ================= */
   const DEFAULT_MEALS = [{ id: 0, n: 'Завтрак' }, { id: 1, n: 'Обед' }, { id: 2, n: 'Ужин' }, { id: 3, n: 'Перекус' }];
-  const mealName = (id) => { const m = S.meals.find((x) => x.id === id); return m ? m.n : 'Другое'; };
-  const defaultMeal = () => {
-    const h = new Date().getHours();
-    const want = h < 11 ? 0 : h < 16 ? 1 : h < 21 ? 2 : 3;
-    return S.meals.some((x) => x.id === want) ? want : S.meals[0].id;
-  };
-  const mealChips = (sel) => `<div class="chips meal-chips">${S.meals.map((x) => `<button type="button" class="chip${x.id === sel ? ' on' : ''}" data-meal="${x.id}">${esc(x.n)}</button>`).join('')}</div>`;
-  function bindMealChips(root, onPick) {
-    root.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-meal]');
-      if (!b) return;
-      const id = +b.dataset.meal;
-      $$('[data-meal]', root).forEach((x) => x.classList.toggle('on', +x.dataset.meal === id));
-      haptic.tap();
-      onPick(id);
-    });
-  }
   const ACT = [
     [1.2, 'Почти без движения', 'сидячая работа, без тренировок'],
     [1.375, 'Немного', '1–3 тренировки в неделю'],
@@ -197,12 +200,40 @@
   });
 
   /* ================= state ================= */
-  const S = { date: todayStr(), entries: [], profile: null, goals: DEFAULT_GOALS, recent: [], my: null, tab: 'diary', meals: DEFAULT_MEALS.slice() };
-  const saveMeals = () => Store.setJSON('meals', S.meals);
+  const S = {
+    date: todayStr(), day: { e: [], w: 0 }, prev: [], profile: null, goals: DEFAULT_GOALS,
+    recent: [], my: null, tab: 'diary', meals: DEFAULT_MEALS.slice(), weights: [], period: 7, statDays: null,
+  };
   const view = $('#view');
 
-  async function loadDay() { S.entries = parseJSON(await Store.get(dayKey(S.date)), []) || []; }
-  function saveDay() { return Store.setJSON(dayKey(S.date), S.entries); }
+  const mealName = (id) => { const m = S.meals.find((x) => x.id === id); return m ? m.n : 'Другое'; };
+  const defaultMeal = () => {
+    const h = new Date().getHours();
+    const want = h < 11 ? 0 : h < 16 ? 1 : h < 21 ? 2 : 3;
+    return S.meals.some((x) => x.id === want) ? want : S.meals[0].id;
+  };
+  const mealChips = (sel) => `<div class="chips meal-chips">${S.meals.map((x) => `<button type="button" class="chip${x.id === sel ? ' on' : ''}" data-meal="${x.id}">${esc(x.n)}</button>`).join('')}</div>`;
+  function selectChip(root, attr, val) {
+    $$(`[data-${attr}]`, root).forEach((b) => b.classList.toggle('on', b.dataset[attr] === String(val)));
+  }
+  const saveMeals = () => Store.setJSON('meals', S.meals);
+  const waterGoal = () => (S.profile && S.profile.water) || 2000;
+  const glassMl = () => (S.profile && S.profile.glass) || 250;
+
+  const parseDay = (v) => {
+    const d = parseJSON(v, null);
+    if (Array.isArray(d)) return { e: d, w: 0 };
+    if (d && typeof d === 'object') return { e: Array.isArray(d.e) ? d.e : [], w: +d.w || 0 };
+    return { e: [], w: 0 };
+  };
+  async function loadDay() {
+    const k = dayKey(S.date), kp = dayKey(addDays(S.date, -1));
+    const v = await Store.getMany([k, kp]);
+    S.day = parseDay(v[k]);
+    S.prev = parseDay(v[kp]).e;
+  }
+  const saveDay = () => Store.setJSON(dayKey(S.date), { e: S.day.e, w: S.day.w || 0 });
+  const saveWeights = () => Store.setJSON('weight', S.weights.slice(-250).map((x) => [x.d, x.kg]));
 
   async function ensureMy() {
     if (S.my) return S.my;
@@ -210,22 +241,38 @@
     const map = new Map();
     for (let i = 0; i < keys.length; i += 50) {
       const vals = await Store.getMany(keys.slice(i, i + 50));
-      Object.values(vals).forEach((v) => { const p = parseJSON(v, null); if (p && p.id) map.set(p.id, Object.assign(p, { src: 'my' })); });
+      Object.values(vals).forEach((v) => {
+        const p = parseJSON(v, null);
+        if (p && p.id) map.set(p.id, Object.assign(p, { src: p.src === 'dish' ? 'dish' : 'my' }));
+      });
     }
     S.my = map;
     return map;
   }
   async function saveMy(prod) {
     await ensureMy();
-    const p = compact(Object.assign({}, prod, { src: 'my' }));
+    const isDish = prod.src === 'dish';
+    const p = compact(prod);
+    p.src = isDish ? 'dish' : 'my';
+    if (isDish) { p.ing = prod.ing; p.sv = prod.sv || undefined; p.cw = prod.cw || undefined; }
+    const json = JSON.stringify(p);
+    if (json.length > CLOUD_MAX - 32) { toast('Слишком много ингредиентов — убери несколько'); return null; }
     S.my.set(p.id, p);
-    await Store.setJSON('p_' + p.id, p);
+    await Store.set('p_' + p.id, json);
+    if (S.recent.some((x) => x.id === p.id)) {
+      S.recent = S.recent.map((x) => (x.id === p.id ? compact(p) : x));
+      Store.setJSON('recent', S.recent);
+    }
     return p;
   }
   async function deleteMy(id) {
     await ensureMy();
     S.my.delete(id);
     await Store.del('p_' + id);
+    if (S.recent.some((x) => x.id === id)) {
+      S.recent = S.recent.filter((x) => x.id !== id);
+      Store.setJSON('recent', S.recent);
+    }
   }
   async function pushRecent(prod) {
     let list = [compact(prod)].concat(S.recent.filter((x) => x.id !== prod.id)).slice(0, 20);
@@ -234,6 +281,8 @@
     S.recent = list;
     await Store.set('recent', json);
   }
+  const fullProd = (p) => (p && S.my && S.my.get(p.id)) || p;
+  const isDish = (p) => fullProd(p) && fullProd(p).src === 'dish';
 
   /* ================= Open Food Facts ================= */
   const OFF = 'https://world.openfoodfacts.org';
@@ -317,14 +366,14 @@
     return { type: /^https?:\/\//i.test(s) ? 'url' : 'text', value: s };
   }
 
-  /* ================= UI: toast, sheets ================= */
+  /* ================= UI: toast, confirm, sheets ================= */
   let toastTimer;
   function toast(msg) {
     const t = $('#toast');
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
   }
   function confirmBox(msg) {
     return new Promise((resolve) => {
@@ -373,12 +422,7 @@
         <div class="sheet-body">${body}</div>
       </section>`;
     $('#sheets').appendChild(wrap);
-    const api = {
-      el: wrap,
-      body: $('.sheet-body', wrap),
-      close: () => closeSheet(api),
-      onClose: null,
-    };
+    const api = { el: wrap, body: $('.sheet-body', wrap), close: () => closeSheet(api), onClose: null };
     $('.sheet-backdrop', wrap).addEventListener('click', api.close);
     $('.sheet-close', wrap).addEventListener('click', api.close);
     sheets.push(api);
@@ -396,6 +440,7 @@
     syncBack();
   }
   function closeAll() { sheets.slice().reverse().forEach(closeSheet); }
+  function closeAbove(base) { const i = sheets.indexOf(base); sheets.slice(i + 1).reverse().forEach(closeSheet); }
   function syncBack() {
     if (!ver('6.1')) return;
     if (sheets.length || scanner.active) tg.BackButton.show(); else tg.BackButton.hide();
@@ -407,25 +452,42 @@
   }
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') goBack(); });
 
-  /* ================= diary ================= */
+  const segCtl = (name, val, opts) => `<div class="seg" role="radiogroup">
+      <input type="hidden" name="${name}" value="${esc(val)}">
+      ${opts.map(([v, l]) => `<button type="button" role="radio" aria-checked="${v === val}" data-seg="${name}" data-v="${v}" class="${v === val ? 'on' : ''}">${l}</button>`).join('')}
+    </div>`;
+  function segPick(root, b) {
+    const name = b.dataset.seg;
+    const hidden = $(`input[name=${name}]`, root);
+    if (hidden) hidden.value = b.dataset.v;
+    $$(`[data-seg=${name}]`, root).forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
+    haptic.tap();
+    return b.dataset.v;
+  }
+  const field = (name, label, val, mode, unit, cls) => `<label class="fld${cls ? ' ' + cls : ''}"><span>${label}</span><div class="inp"><input name="${name}" inputmode="${mode}" value="${val == null ? '' : esc(fmt1(val))}" autocomplete="off">${unit ? `<em>${unit}</em>` : ''}</div></label>`;
+
+  /* ================= render ================= */
   function render() {
     $$('.tabbar [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
-    if (S.tab === 'profile') renderProfile(); else renderDiary();
+    ({ diary: renderDiary, progress: renderProgress, dishes: renderDishes, profile: renderProfile }[S.tab] || renderDiary)();
   }
+  function goTab(tab) { closeAll(); S.tab = tab; render(); window.scrollTo(0, 0); }
 
+  /* ================= diary ================= */
   const macroCol = (key, label, val, goal) => `
     <div class="mac ${key}">
       <span class="mac-name">${label}</span>
       <span class="mac-val"><b>${fmt(val)}</b> / ${fmt(goal)} г</span>
       <span class="mac-bar"><i style="width:${goal ? Math.min(100, (val / goal) * 100).toFixed(1) : 0}%"></i></span>
     </div>`;
-
   const entrySub = (e) => (e.x
     ? `Б ${fmt1(e.p)}, Ж ${fmt1(e.f)}, У ${fmt1(e.c)}`
     : `${fmt(e.g)} г${e.b ? ', ' + esc(e.b) : ''}`);
+  const prevWord = () => (S.date === todayStr() ? 'вчера' : 'в прошлый день');
 
   function mealBlock(id, title, list, canAdd) {
     const t = totals(list);
+    const prevList = canAdd && !list.length ? S.prev.filter((e) => e.m === id) : [];
     return `<div class="meal">
       <div class="meal-head">
         ${canAdd ? `<button class="meal-title" data-meal-edit="${id}" aria-label="Переименовать «${esc(title)}»"><h3>${esc(title)}</h3></button>` : `<h3>${esc(title)}</h3>`}
@@ -435,17 +497,151 @@
         <span class="e-name">${esc(e.n)}<small>${entrySub(e)}</small></span>
         <span class="e-k">${fmt((e.k * e.g) / 100)}</span>
       </button>`).join('')}
+      ${prevList.length ? `<button class="copy-row" data-copy-meal="${id}">${ICON.repeat}<span>Как ${prevWord()}: ${esc(clip(prevList.map((e) => e.n).join(', '), 42))}<small>${fmt(totals(prevList).k)} ккал</small></span></button>` : ''}
       ${canAdd ? `<button class="add-row" data-add="${id}">${ICON.plus}<span>Добавить</span></button>` : ''}
     </div>`;
   }
   function mealsHTML() {
     const known = new Set(S.meals.map((m) => m.id));
-    const orphans = S.entries.filter((e) => !known.has(e.m));
-    return S.meals.map((m) => mealBlock(m.id, m.n, S.entries.filter((e) => e.m === m.id), true)).join('')
+    const orphans = S.day.e.filter((e) => !known.has(e.m));
+    return S.meals.map((m) => mealBlock(m.id, m.n, S.day.e.filter((e) => e.m === m.id), true)).join('')
       + (orphans.length ? mealBlock(-1, 'Другое', orphans, false) : '')
       + `<button class="add-meal" data-act="new-meal">${ICON.plus}<span>Добавить приём пищи</span></button>`;
   }
+  function repeatDayCard() {
+    if (S.day.e.length || !S.prev.length) return '';
+    return `<button class="repeat-card" data-act="repeat-day">${ICON.repeat}
+      <span><b>Повторить ${S.date === todayStr() ? 'вчерашний' : 'предыдущий'} день</b><small>${S.prev.length} ${plural(S.prev.length, 'запись', 'записи', 'записей')}, ${fmt(totals(S.prev).k)} ккал</small></span>
+    </button>`;
+  }
+  function waterCard() {
+    const w = S.day.w || 0, goal = waterGoal(), gl = glassMl();
+    const n = Math.round(goal / gl);
+    const glasses = w / gl;
+    const vis = n >= 3 && n <= 12
+      ? `<div class="w-glasses" aria-hidden="true">${Array.from({ length: n }, (_, i) => `<i><b style="height:${(Math.max(0, Math.min(1, glasses - i)) * 100).toFixed(0)}%"></b></i>`).join('')}</div>`
+      : `<div class="w-bar" aria-hidden="true"><i style="width:${Math.min(100, (w / goal) * 100).toFixed(1)}%"></i></div>`;
+    const gCount = r1(glasses);
+    const sub = w ? `${fmt1(gCount)} ${Number.isInteger(gCount) ? plural(gCount, 'стакан', 'стакана', 'стаканов') : 'стакана'} по ${gl} мл` : `Стакан — ${gl} мл`;
+    return `<section class="card water">
+      <div class="w-head">
+        <h3>Вода</h3>
+        <button class="w-total" data-act="water"><b>${fmtL(w)}</b> из ${fmtL(goal)}</button>
+      </div>
+      ${vis}
+      <p class="muted small w-sub">${sub}</p>
+      <div class="w-actions">
+        <button class="chip" data-water="${gl}">+ Стакан</button>
+        <button class="chip" data-water="500">+ 0,5 л</button>
+        <button class="chip" data-act="water">Свой объём</button>
+      </div>
+    </section>`;
+  }
 
+  function renderDiary() {
+    const g = S.goals;
+    const t = totals(S.day.e);
+    const left = g.kcal - t.k;
+    const over = left < -0.5;
+    const scale = Math.max(g.kcal, t.k) || 1;
+    const mk = { p: t.p * 4, f: t.f * 9, c: t.c * 4 };
+    const mkSum = mk.p + mk.f + mk.c;
+    const seg = (v) => (mkSum ? ((t.k / scale) * (v / mkSum) * 100) : 0).toFixed(2) + '%';
+    const isToday = S.date === todayStr();
+
+    view.innerHTML = `
+      <header class="day-nav">
+        <button class="icon-btn" data-act="prev" aria-label="Предыдущий день">${ICON.left}</button>
+        <button class="day-title" data-act="today" ${isToday ? 'disabled' : ''}>${esc(capFirst(dateLabel(S.date)))}</button>
+        <button class="icon-btn" data-act="next" aria-label="Следующий день">${ICON.right}</button>
+      </header>
+
+      <section class="summary">
+        <p class="sum-label">${over ? 'Больше нормы на' : 'Осталось'}</p>
+        <p class="sum-big${over ? ' over' : ''}">${fmt(Math.abs(left))}<span>ккал</span></p>
+        <p class="sum-sub">Съедено ${fmt(t.k)} из ${fmt(g.kcal)}</p>
+        <div class="meter" role="img" aria-label="Съедено ${fmt(t.k)} из ${fmt(g.kcal)} ккал">
+          ${mkSum > 0 ? `<i class="seg p" style="width:${seg(mk.p)}"></i><i class="seg f" style="width:${seg(mk.f)}"></i><i class="seg c" style="width:${seg(mk.c)}"></i>` : ''}
+          ${over ? `<b class="goal-tick" style="left:${((g.kcal / scale) * 100).toFixed(2)}%"></b>` : ''}
+        </div>
+        <div class="macros">${macroCol('p', 'Белки', t.p, g.p)}${macroCol('f', 'Жиры', t.f, g.f)}${macroCol('c', 'Углеводы', t.c, g.c)}</div>
+        ${g.def ? `<button class="hint-card" data-act="profile">Сейчас стоит норма 2 000 ккал по умолчанию. <span>Задать свою норму</span></button>` : ''}
+      </section>
+      ${homeBanner()}
+      ${waterCard()}
+      ${repeatDayCard()}
+      <section class="meals">${mealsHTML()}</section>`;
+  }
+
+  function refreshWater() {
+    const c = $('.water');
+    if (c && S.tab === 'diary') c.outerHTML = waterCard();
+  }
+  async function addWater(ml) {
+    S.day.w = Math.max(0, Math.round((S.day.w || 0) + ml));
+    await saveDay();
+    haptic.tap();
+    refreshWater();
+    toast(ml >= 0 ? `Вода: +${fmtMl(ml)}` : `Вода: −${fmtMl(-ml)}`);
+  }
+  async function copyEntries(src) {
+    const add = src.map((e) => Object.assign({}, e, { i: uid() }));
+    S.day.e = S.day.e.concat(add);
+    await saveDay();
+    haptic.ok();
+    renderDiary();
+    toast(`Скопировано: ${add.length} ${plural(add.length, 'запись', 'записи', 'записей')}`);
+  }
+
+  async function switchDay(d) {
+    haptic.tap();
+    S.date = d;
+    await loadDay();
+    if (S.tab === 'diary') renderDiary();
+  }
+  const entryToProd = (e) => ({ id: e.pid || 'e' + e.i, n: e.n, b: e.b, k: e.k, p: e.p, f: e.f, c: e.c, u: e.u, ug: e.ug, q: e.q, s: e.s, src: 'entry' });
+
+  view.addEventListener('click', async (e) => {
+    const el = e.target.closest('button');
+    if (!el || !view.contains(el)) return;
+    const ds = el.dataset;
+    if (ds.add != null) { haptic.tap(); return openAdd({ meal: +ds.add }); }
+    if (ds.mealEdit != null) { haptic.tap(); return openMealEdit(+ds.mealEdit); }
+    if (ds.copyMeal != null) return copyEntries(S.prev.filter((x) => x.m === +ds.copyMeal));
+    if (ds.water != null) return addWater(+ds.water);
+    if (ds.entry) {
+      const entry = S.day.e.find((x) => x.i === ds.entry);
+      if (!entry) return;
+      if (entry.x) openQuick({ entry, meal: entry.m });
+      else openProduct(entryToProd(entry), { entry, meal: entry.m });
+      return;
+    }
+    if (ds.day) { S.tab = 'diary'; await switchDay(ds.day); render(); window.scrollTo(0, 0); return; }
+    if (ds.dish) { await ensureMy(); const d = S.my.get(ds.dish); if (d) openDish(d); return; }
+    if (ds.prod) { await ensureMy(); const p = S.my.get(ds.prod); if (p) openCustom({ prefill: p, standalone: true }); return; }
+    if (ds.delProd) {
+      await ensureMy();
+      const p = S.my.get(ds.delProd);
+      if (!p || !(await confirmBox(`Удалить «${p.n}» из твоих продуктов? Записи в дневнике останутся.`))) return;
+      await deleteMy(p.id);
+      return renderDishes();
+    }
+    if (ds.seg === 'period') { S.period = +segPick(view, el); return drawStats(); }
+    const act = ds.act;
+    if (act === 'prev') return switchDay(addDays(S.date, -1));
+    if (act === 'next') return switchDay(addDays(S.date, 1));
+    if (act === 'today') return switchDay(todayStr());
+    if (act === 'new-meal') return openMealEdit(null);
+    if (act === 'repeat-day') return copyEntries(S.prev);
+    if (act === 'water') return openWater();
+    if (act === 'weight-add') return openWeight();
+    if (act === 'new-dish') return openDish(null);
+    if (act === 'home-add') return addHome();
+    if (act === 'home-hide') { lsSet('hs_hide', '1'); const c = el.closest('.home-card'); if (c) c.remove(); return; }
+    if (act === 'profile') return goTab('profile');
+  });
+
+  /* ================= meals: add / rename / delete ================= */
   function openMealEdit(id) {
     const meal = S.meals.find((m) => m.id === id);
     const isNew = !meal;
@@ -472,7 +668,7 @@
     });
     const del = $('[data-act=del]', sh.body);
     if (del) del.addEventListener('click', async () => {
-      if (S.entries.some((x) => x.m === id)) { haptic.err(); return toast('Сначала удали записи из этого приёма пищи'); }
+      if (S.day.e.some((x) => x.m === id)) { haptic.err(); return toast('Сначала удали записи из этого приёма пищи'); }
       if (!(await confirmBox(`Убрать «${meal.n}» из дневника?`))) return;
       S.meals = S.meals.filter((m) => m.id !== id);
       await saveMeals();
@@ -481,111 +677,68 @@
     });
   }
 
-  function renderDiary() {
-    const g = S.goals;
-    const t = totals(S.entries);
-    const left = g.kcal - t.k;
-    const over = left < -0.5;
-    const scale = Math.max(g.kcal, t.k) || 1;
-    const mk = { p: t.p * 4, f: t.f * 9, c: t.c * 4 };
-    const mkSum = mk.p + mk.f + mk.c;
-    const seg = (v) => (mkSum ? ((t.k / scale) * (v / mkSum) * 100) : 0).toFixed(2) + '%';
-    const isToday = S.date === todayStr();
-
-    view.innerHTML = `
-      <header class="day-nav">
-        <button class="icon-btn" data-act="prev" aria-label="Предыдущий день">${ICON.left}</button>
-        <button class="day-title" data-act="today" ${isToday ? 'disabled' : ''}>${esc(dateLabel(S.date))}</button>
-        <button class="icon-btn" data-act="next" aria-label="Следующий день">${ICON.right}</button>
-      </header>
-
-      <section class="summary">
-        <p class="sum-label">${over ? 'Больше цели на' : 'Осталось'}</p>
-        <p class="sum-big${over ? ' over' : ''}">${fmt(Math.abs(left))}<span>ккал</span></p>
-        <p class="sum-sub">Съедено ${fmt(t.k)} из ${fmt(g.kcal)}</p>
-        <div class="meter" role="img" aria-label="Съедено ${fmt(t.k)} из ${fmt(g.kcal)} ккал">
-          ${mkSum > 0 ? `<i class="seg p" style="width:${seg(mk.p)}"></i><i class="seg f" style="width:${seg(mk.f)}"></i><i class="seg c" style="width:${seg(mk.c)}"></i>` : ''}
-          ${over ? `<b class="goal-tick" style="left:${((g.kcal / scale) * 100).toFixed(2)}%"></b>` : ''}
+  /* ================= water ================= */
+  function openWater() {
+    const gl = glassMl();
+    const UNITS = {
+      glass: { label: 'стак.', mul: gl, def: 1, chips: [1, 2, 3] },
+      l: { label: 'л', mul: 1000, def: 0.5, chips: [0.3, 0.5, 1, 1.5] },
+      ml: { label: 'мл', mul: 1, def: 250, chips: [100, 200, 330, 500] },
+    };
+    let unit = 'glass';
+    const sh = openSheet({
+      title: 'Вода',
+      body: `
+        <p class="w-now">${S.date === todayStr() ? 'Сегодня' : esc(dateLabel(S.date))} выпито <b>${fmtL(S.day.w || 0)}</b> из ${fmtL(waterGoal())}</p>
+        ${segCtl('wunit', unit, [['glass', 'Стаканы'], ['l', 'Литры'], ['ml', 'Миллилитры']])}
+        <div class="inp big w-inp"><input id="wv" inputmode="decimal" autocomplete="off"><em id="wu"></em></div>
+        <div class="chips" id="wchips"></div>
+        <p class="muted small" id="wcalc"></p>
+        <div class="row2">
+          <button type="button" class="btn ghost" data-act="sub">${ICON.minus}<span>Убрать</span></button>
+          <button type="button" class="btn primary" data-act="add">${ICON.plus}<span>Добавить</span></button>
         </div>
-        <div class="macros">${macroCol('p', 'Белки', t.p, g.p)}${macroCol('f', 'Жиры', t.f, g.f)}${macroCol('c', 'Углеводы', t.c, g.c)}</div>
-        ${g.def ? `<button class="hint-card" data-act="profile">Сейчас стоит норма 2 000 ккал по умолчанию. <span>Задать свою норму</span></button>` : ''}
-      </section>
-
-      ${homeBanner()}
-      <section class="meals">${mealsHTML()}</section>
-
-      <section class="week card">
-        <h2>Последние 7 дней</h2>
-        <div id="week"><div class="week-chart"></div></div>
-      </section>`;
-    renderWeek();
-  }
-
-  async function renderWeek() {
-    const forDate = S.date;
-    const days = Array.from({ length: 7 }, (_, i) => addDays(forDate, i - 6));
-    const vals = await Store.getMany(days.map(dayKey));
-    if (S.tab !== 'diary' || S.date !== forDate) return;
-    const box = $('#week');
-    if (!box) return;
-    const kc = days.map((d) => (d === forDate ? totals(S.entries).k : totals(parseJSON(vals[dayKey(d)], []) || []).k));
-    const goal = S.goals.kcal;
-    const max = Math.max(goal * 1.2, ...kc) || 1;
-    const logged = kc.filter((v) => v > 0);
-    const avg = logged.length ? logged.reduce((a, b) => a + b, 0) / logged.length : 0;
-    box.innerHTML = `
-      <div class="week-chart">
-        <span class="goal-line" style="bottom:${((goal / max) * 100).toFixed(1)}%"><em>${fmt(goal)}</em></span>
-        ${kc.map((v, i) => `<button class="wb${days[i] === forDate ? ' cur' : ''}${v > goal * 1.05 ? ' over' : ''}" data-day="${days[i]}" aria-label="${esc(dateLabel(days[i]))}: ${fmt(v)} ккал">
-          <i style="height:${Math.max(v ? 3 : 0, (v / max) * 100).toFixed(1)}%"></i>
-        </button>`).join('')}
-      </div>
-      <div class="week-days">${days.map((d) => `<span${d === forDate ? ' class="cur"' : ''}>${parseD(d).toLocaleDateString('ru-RU', { weekday: 'short' })}</span>`).join('')}</div>
-      <p class="muted">${logged.length ? `В среднем ${fmt(avg)} ккал в день — по ${logged.length} ${plural(logged.length, 'дню', 'дням', 'дням')} с записями` : 'Пока нет записей за эту неделю'}</p>`;
-  }
-
-  view.addEventListener('click', async (e) => {
-    const el = e.target.closest('button');
-    if (!el || !view.contains(el)) return;
-    if (el.dataset.add != null) { haptic.tap(); return openAdd(+el.dataset.add); }
-    if (el.dataset.mealEdit != null) { haptic.tap(); return openMealEdit(+el.dataset.mealEdit); }
-    if (el.dataset.entry) {
-      const entry = S.entries.find((x) => x.i === el.dataset.entry);
-      if (!entry) return;
-      if (entry.x) openQuick({ entry, meal: entry.m });
-      else openProduct(entryToProd(entry), { entry, meal: entry.m });
-      return;
+        <p class="muted small">Стакан — ${gl} мл. Объём стакана и норма воды меняются на вкладке «Норма».</p>`,
+    });
+    const vi = $('#wv', sh.body);
+    const ml = () => (num(vi.value) || 0) * UNITS[unit].mul;
+    function setUnit(u) {
+      unit = u;
+      const U = UNITS[u];
+      vi.value = fmt1(U.def);
+      $('#wu', sh.body).textContent = U.label;
+      $('#wchips', sh.body).innerHTML = U.chips.map((c) => `<button type="button" class="chip" data-wq="${c}">${fmt1(c)} ${U.label}</button>`).join('');
+      upd();
     }
-    if (el.dataset.day) { await switchDay(el.dataset.day); return; }
-    const act = el.dataset.act;
-    if (act === 'prev') return switchDay(addDays(S.date, -1));
-    if (act === 'next') return switchDay(addDays(S.date, 1));
-    if (act === 'today') return switchDay(todayStr());
-    if (act === 'new-meal') return openMealEdit(null);
-    if (act === 'home-add') return addHome();
-    if (act === 'home-hide') { lsSet('hs_hide', '1'); const c = el.closest('.home-card'); if (c) c.remove(); return; }
-    if (act === 'profile') { S.tab = 'profile'; render(); window.scrollTo(0, 0); }
-  });
-
-  async function switchDay(d) {
-    haptic.tap();
-    S.date = d;
-    await loadDay();
-    if (S.tab === 'diary') renderDiary();
+    function upd() { $('#wcalc', sh.body).textContent = unit === 'ml' ? '' : `Это ${fmtMl(ml())}`; }
+    vi.addEventListener('input', upd);
+    vi.addEventListener('focus', () => vi.select());
+    sh.body.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.seg) return setUnit(segPick(sh.body, b));
+      if (b.dataset.wq) { vi.value = fmt1(+b.dataset.wq); upd(); return haptic.tap(); }
+      const act = b.dataset.act;
+      if (act !== 'add' && act !== 'sub') return;
+      const v = ml();
+      if (!v || v <= 0 || v > 5000) { haptic.err(); return toast('Объём — от 1 мл до 5 л'); }
+      sh.close();
+      await addWater(act === 'add' ? v : -Math.min(v, S.day.w || 0));
+    });
+    setUnit('glass');
   }
-
-  const entryToProd = (e) => ({ id: e.pid || 'e' + e.i, n: e.n, b: e.b, k: e.k, p: e.p, f: e.f, c: e.c, u: e.u, ug: e.ug, q: e.q, s: e.s, src: 'entry' });
 
   /* ================= add / search ================= */
-  function localSearch(q) {
+  function localSearch(q, noDish) {
     const nq = norm(q);
     if (!nq) return [];
     const words = nq.split(' ');
-    const pool = [].concat(S.recent, S.my ? Array.from(S.my.values()) : [], BASE);
+    const mine = S.my ? Array.from(S.my.values()) : [];
+    const pool = [].concat(mine.filter((p) => p.src === 'dish'), S.recent, mine.filter((p) => p.src !== 'dish'), BASE);
     const seen = new Set();
     const out = [];
     pool.forEach((p) => {
-      if (seen.has(p.id)) return;
+      if (seen.has(p.id) || (noDish && isDish(p))) return;
       const hay = norm(p.n + ' ' + (p.b || ''));
       if (!words.every((w) => hay.includes(w))) return;
       seen.add(p.id);
@@ -596,29 +749,33 @@
   }
 
   const resRow = (p, i) => {
-    const sub = p.b || (p.u && p.ug ? `1 ${p.u} ≈ ${p.ug} г` : '');
+    const sub = isDish(p) ? (p.s ? `Блюдо, порция ${fmt(p.s)} г` : 'Блюдо') : p.b || (p.u && p.ug ? `1 ${p.u} ≈ ${p.ug} г` : '');
     return `<button class="res" data-pick="${i}">
       <span class="res-name">${esc(p.n)}${sub ? `<small>${esc(sub)}</small>` : ''}</span>
       <span class="res-k">${p.k != null ? fmt(p.k) : '—'}<small>ккал / 100 г</small></span>
     </button>`;
   };
 
-  function openAdd(meal, presetQuery) {
-    let m = meal != null ? meal : defaultMeal();
+  // ctx: { meal } — добавить в дневник; { pick(prod, grams), base } — выбрать ингредиент для блюда
+  function openAdd(ctx) {
+    ctx = ctx || {};
+    const pick = typeof ctx.pick === 'function';
+    let m = ctx.meal != null ? ctx.meal : defaultMeal();
+    const cx = () => (pick ? ctx : { meal: m });
     let picks = [];
     let offResults = null;
     let offState = 'idle';
     const notToday = S.date !== todayStr();
     const sh = openSheet({
-      title: notToday ? `Добавить: ${dateLabel(S.date).toLowerCase()}` : 'Добавить',
+      title: pick ? 'Ингредиент' : notToday ? `Добавить: ${dateLabel(S.date).toLowerCase()}` : 'Добавить',
       body: `
-        ${mealChips(m)}
+        ${pick ? '' : mealChips(m)}
         <form class="search" role="search">
-          <input type="search" id="q" placeholder="Гречка, творог или цифры штрихкода" autocomplete="off" enterkeyhint="search" value="${esc(presetQuery || '')}">
+          <input type="search" id="q" placeholder="Гречка, творог или цифры штрихкода" autocomplete="off" enterkeyhint="search">
           <button type="button" class="icon-btn accent" data-act="scan" aria-label="Сканировать штрихкод">${ICON.scan}</button>
         </form>
-        <div class="add-actions">
-          <button class="btn ghost" data-act="quick">Только ккал и БЖУ</button>
+        <div class="add-actions${pick ? ' one' : ''}">
+          ${pick ? '' : '<button class="btn ghost" data-act="quick">Ккал и БЖУ</button><button class="btn ghost" data-act="dish">Новое блюдо</button>'}
           <button class="btn ghost" data-act="custom">Свой продукт</button>
         </div>
         <div id="results"></div>`,
@@ -635,40 +792,45 @@
         html += `<h4 class="group">${title}</h4>`;
         list.forEach((p) => { html += resRow(p, picks.length); picks.push(p); });
       };
+      const mine = S.my ? Array.from(S.my.values()) : [];
       if (!q) {
-        group('Недавние', S.recent.slice(0, 12));
-        group('Мои продукты', S.my ? Array.from(S.my.values()).slice(0, 30) : []);
+        if (!pick) group('Мои блюда', mine.filter((p) => p.src === 'dish').slice(0, 20));
+        group('Недавние', S.recent.filter((p) => !(pick && isDish(p))).slice(0, 12));
+        group('Мои продукты', mine.filter((p) => p.src !== 'dish').slice(0, 30));
         if (!picks.length) html += `<p class="empty-text">Начни вводить название или отсканируй штрихкод на упаковке.</p>`;
       } else {
         const digits = q.replace(/\s/g, '');
         if (/^\d{8,14}$/.test(digits)) {
           html += `<button class="btn primary" data-act="code">${ICON.search}<span>Найти по штрихкоду ${esc(digits)}</span></button>`;
         } else {
-          group('Найдено', localSearch(q));
+          group('Найдено', localSearch(q, pick));
           if (offState === 'loading') html += `<div class="loading small"><span class="spinner"></span><p>Ищу в базе магазинов…</p></div>`;
           else if (offState === 'done') {
             if (offResults && offResults.length) group('Из магазинов', offResults);
             else html += `<p class="empty-text">В базе магазинов ничего не нашлось. Добавь продукт сам — займёт полминуты.</p>`;
           } else if (offState === 'error') html += `<p class="empty-text">${esc(offResults)}</p><button class="btn ghost" data-act="off">Повторить поиск</button>`;
-          else html += `<button class="btn ghost" data-act="off">${ICON.search}<span>Искать «${esc(q)}» в базе магазинов</span></button>`;
+          else html += `<button class="btn ghost" data-act="off">${ICON.search}<span>Искать «${esc(clip(q, 24))}» в базе магазинов</span></button>`;
         }
       }
       results.innerHTML = html;
     }
-
     async function runOff() {
       const q = input.value.trim();
       if (q.length < 2) return;
       offState = 'loading'; draw();
-      try {
-        offResults = await offSearch(q);
-        offState = 'done';
-      } catch (err) {
+      try { offResults = await offSearch(q); offState = 'done'; } catch (err) {
         offState = 'error';
         offResults = err && err.busy ? 'База магазинов перегружена. Подожди минуту и повтори.' : 'Не получилось связаться с базой. Проверь интернет.';
       }
       if (input.value.trim() === q) draw();
     }
+    function codeFromInput(digits) {
+      const c = normalizeCode(digits);
+      if (c.type === 'bad') { haptic.err(); return toast('В коде ошибка — проверь цифры под штрихкодом'); }
+      if (c.type === 'weight') return toast('Это внутренний код магазина для весового товара. Найди продукт по названию.');
+      lookupCode(c.value, cx());
+    }
+    const typed = () => (/^\d+$/.test(input.value.trim()) ? '' : input.value.trim());
 
     input.addEventListener('input', () => { offState = 'idle'; offResults = null; draw(); });
     $('form', sh.body).addEventListener('submit', (e) => {
@@ -678,56 +840,49 @@
       input.blur();
       runOff();
     });
-    function codeFromInput(digits) {
-      const c = normalizeCode(digits);
-      if (c.type === 'bad') { haptic.err(); return toast('В коде ошибка — проверь цифры под штрихкодом'); }
-      if (c.type === 'weight') return toast('Это внутренний код магазина для весового товара. Найди продукт по названию.');
-      lookupCode(c.value, { meal: m });
-    }
     sh.body.addEventListener('click', (e) => {
       const el = e.target.closest('button');
       if (!el) return;
-      if (el.dataset.meal != null) {
-        m = +el.dataset.meal;
-        $$('[data-meal]', sh.body).forEach((b) => b.classList.toggle('on', +b.dataset.meal === m));
-        return haptic.tap();
-      }
-      if (el.dataset.pick != null) { const p = picks[+el.dataset.pick]; if (p) openProduct(p, { meal: m }); return; }
+      if (el.dataset.meal != null) { m = +el.dataset.meal; selectChip(sh.body, 'meal', m); return haptic.tap(); }
+      if (el.dataset.pick != null) { const p = picks[+el.dataset.pick]; if (p) openProduct(fullProd(p), cx()); return; }
       const act = el.dataset.act;
-      if (act === 'scan') return openScanner({ meal: m });
-      if (act === 'custom') return openCustom({ meal: m, prefill: { n: /^\d+$/.test(input.value.trim()) ? '' : input.value.trim() } });
-      if (act === 'quick') return openQuick({ meal: m, name: /^\d+$/.test(input.value.trim()) ? '' : input.value.trim() });
+      if (act === 'scan') return openScanner(cx());
+      if (act === 'custom') return openCustom({ prefill: { n: typed() } }, cx());
+      if (act === 'quick') return openQuick({ meal: m, name: typed() });
+      if (act === 'dish') return openDish(null, { meal: m, name: typed() });
       if (act === 'off') return runOff();
       if (act === 'code') return codeFromInput(input.value.replace(/\s/g, ''));
     });
 
     draw();
     if (!S.my) ensureMy().then(() => { if (!input.value.trim()) draw(); });
-    if (!presetQuery && !ver('6.0')) setTimeout(() => input.focus(), 300);
+    if (!inTG) setTimeout(() => input.focus(), 300);
   }
 
   /* ================= product card ================= */
   function openProduct(prod, ctx) {
     ctx = ctx || {};
+    const pick = typeof ctx.pick === 'function';
     if (prod.k == null) {
-      return openCustom({ meal: ctx.meal, prefill: prod, reason: 'В базе нет КБЖУ для этого продукта. Перепиши с упаковки — сохраню, и в следующий раз он найдётся по скану сразу.' });
+      return openCustom({ prefill: prod, reason: 'В базе нет КБЖУ для этого продукта. Перепиши с упаковки — сохраню, и в следующий раз он найдётся по скану сразу.' }, ctx);
     }
     const entry = ctx.entry;
+    const dish = isDish(prod);
     let m = ctx.meal != null ? ctx.meal : defaultMeal();
-    let grams = entry ? entry.g : prod.ug ? prod.ug : prod.q && prod.q <= 120 ? prod.q : prod.s ? prod.s : 100;
+    const grams = entry ? entry.g : prod.ug ? prod.ug : dish && prod.s ? prod.s : prod.q && prod.q <= 120 ? prod.q : prod.s ? prod.s : 100;
 
     const portions = [];
     if (prod.ug && prod.u) portions.push([prod.ug, `1 ${prod.u}`]);
     if (prod.s) portions.push([prod.s, 'Порция']);
-    if (prod.q) portions.push([prod.q, 'Вся упаковка']);
+    if (prod.q) portions.push([prod.q, dish ? 'Всё блюдо' : 'Вся упаковка']);
     [50, 100, 150, 200].forEach((g) => { if (!portions.some((p) => p[0] === g)) portions.push([g, null]); });
 
     const sh = openSheet({
-      title: entry ? 'Запись в дневнике' : 'Продукт',
+      title: pick ? 'Ингредиент' : entry ? 'Запись в дневнике' : dish ? 'Блюдо' : 'Продукт',
       body: `
         <div class="prod-head">
           ${prod.img ? `<img src="${esc(prod.img)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
-          <div><h3>${esc(prod.n)}</h3>${prod.b ? `<p>${esc(prod.b)}</p>` : prod.src === 'base' ? '<p>Средние значения</p>' : ''}</div>
+          <div><h3>${esc(prod.n)}</h3>${prod.b ? `<p>${esc(prod.b)}</p>` : prod.src === 'base' ? '<p>Средние значения</p>' : dish ? '<p>Твоё блюдо</p>' : ''}</div>
         </div>
         <div class="per100">
           <div><b>${fmt(prod.k)}</b><span>ккал</span></div>
@@ -747,17 +902,15 @@
 
         <div class="calc" id="calc"></div>
 
-        ${mealChips(m)}
-        <button class="btn primary" data-act="save">${entry ? 'Сохранить' : 'Добавить в дневник'}</button>
+        ${pick ? '' : mealChips(m)}
+        <button class="btn primary" data-act="save">${pick ? 'Добавить в блюдо' : entry ? 'Сохранить' : 'Добавить в дневник'}</button>
         ${entry ? `<button class="btn danger" data-act="del">${ICON.trash}<span>Удалить из дневника</span></button>` : ''}
-        <button class="link-btn" data-act="fix">Неверное КБЖУ? Исправить</button>`,
+        <button class="link-btn" data-act="fix">${dish ? 'Изменить состав блюда' : 'Неверное КБЖУ? Исправить'}</button>`,
     });
     const gi = $('#grams', sh.body);
     const calc = $('#calc', sh.body);
-
     function upd() {
-      const g = num(gi.value) || 0;
-      const k = g / 100;
+      const k = (num(gi.value) || 0) / 100;
       calc.innerHTML = `
         <div class="calc-k"><b>${fmt(prod.k * k)}</b><span>ккал</span></div>
         <div class="p"><b>${fmt1(prod.p * k)}</b><span>Б</span></div>
@@ -771,24 +924,18 @@
     sh.body.addEventListener('click', async (e) => {
       const el = e.target.closest('button');
       if (!el) return;
-      if (el.dataset.d) {
-        const v = Math.max(0, (num(gi.value) || 0) + +el.dataset.d);
-        gi.value = fmt1(v); upd(); return haptic.tap();
-      }
+      if (el.dataset.d) { gi.value = fmt1(Math.max(0, (num(gi.value) || 0) + +el.dataset.d)); upd(); return haptic.tap(); }
       if (el.dataset.g) { gi.value = fmt1(+el.dataset.g); upd(); return haptic.tap(); }
-      if (el.dataset.meal != null) {
-        m = +el.dataset.meal;
-        $$('[data-meal]', sh.body).forEach((b) => b.classList.toggle('on', +b.dataset.meal === m));
-        return haptic.tap();
-      }
+      if (el.dataset.meal != null) { m = +el.dataset.meal; selectChip(sh.body, 'meal', m); return haptic.tap(); }
       const act = el.dataset.act;
       if (act === 'save') {
         const g = num(gi.value);
         if (!g || g <= 0 || g > 5000) { haptic.err(); gi.focus(); return toast('Укажи вес от 1 до 5000 г'); }
+        if (pick) { haptic.ok(); ctx.pick(prod, r1(g)); return; }
         if (entry) {
           Object.assign(entry, { g: r1(g), m });
         } else {
-          S.entries.push({
+          S.day.e.push({
             i: uid(), pid: prod.id, n: String(prod.n).slice(0, 60), b: prod.b ? String(prod.b).slice(0, 30) : undefined,
             g: r1(g), k: r1(prod.k), p: r1(prod.p), f: r1(prod.f), c: r1(prod.c), m,
             u: prod.u || undefined, ug: prod.ug || undefined, q: prod.q || undefined, s: prod.s || undefined,
@@ -804,7 +951,7 @@
       }
       if (act === 'del' && entry) {
         if (!(await confirmBox(`Удалить «${entry.n}» из дневника?`))) return;
-        S.entries = S.entries.filter((x) => x.i !== entry.i);
+        S.day.e = S.day.e.filter((x) => x.i !== entry.i);
         await saveDay();
         haptic.ok();
         closeAll();
@@ -812,7 +959,8 @@
         toast('Удалено');
       }
       if (act === 'fix') {
-        openCustom({ meal: m, prefill: prod, entry, reason: 'Перепиши КБЖУ с упаковки. Исправленный продукт сохранится в «Мои продукты».' });
+        if (dish) { sh.close(); return openDish(fullProd(prod)); }
+        openCustom({ prefill: prod, entry, reason: 'Перепиши КБЖУ с упаковки. Исправленный продукт сохранится в «Мои продукты».' }, ctx);
       }
     });
   }
@@ -822,9 +970,9 @@
     let m = entry ? entry.m : meal != null ? meal : defaultMeal();
     const v = (x) => (x == null ? '' : fmt1(x));
     const sh = openSheet({
-      title: entry ? 'Запись в дневнике' : 'Только ккал и БЖУ',
+      title: entry ? 'Запись в дневнике' : 'Ккал и БЖУ',
       body: `
-        ${entry ? '' : '<p class="note">Для блюда целиком, когда знаешь его калории и БЖУ: из меню кафе, доставки или своего рецепта.</p>'}
+        ${entry ? '' : '<p class="note">Для блюда целиком, когда знаешь его калории и БЖУ: из меню кафе, доставки или с упаковки готовой еды.</p>'}
         <form class="stack" id="qf" novalidate>
           <label class="fld"><span>Название</span><div class="inp"><input name="n" value="${esc(entry ? entry.n : name || '')}" placeholder="Например, поке с курицей" maxlength="60" autocomplete="off"></div></label>
           <p class="fld-title">На всю порцию</p>
@@ -840,7 +988,10 @@
           ${entry ? `<button type="button" class="btn danger" data-act="del">${ICON.trash}<span>Удалить из дневника</span></button>` : ''}
         </form>`,
     });
-    bindMealChips(sh.body, (id) => { m = id; });
+    sh.body.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-meal]');
+      if (b) { m = +b.dataset.meal; selectChip(sh.body, 'meal', m); haptic.tap(); }
+    });
     const form = $('#qf', sh.body);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -855,7 +1006,7 @@
       const n = String(fd.get('n') || '').trim().slice(0, 60) || mealName(m);
       const data = { n, g: 100, k: r1(k), p: r1(pr), f: r1(fa), c: r1(ca), m, x: 1 };
       if (entry) Object.assign(entry, data);
-      else S.entries.push(Object.assign({ i: uid() }, data));
+      else S.day.e.push(Object.assign({ i: uid() }, data));
       await saveDay();
       haptic.ok();
       closeAll();
@@ -866,7 +1017,7 @@
     const del = $('[data-act=del]', sh.body);
     if (del) del.addEventListener('click', async () => {
       if (!(await confirmBox(`Удалить «${entry.n}» из дневника?`))) return;
-      S.entries = S.entries.filter((x) => x.i !== entry.i);
+      S.day.e = S.day.e.filter((x) => x.i !== entry.i);
       await saveDay();
       haptic.ok();
       closeAll();
@@ -876,12 +1027,14 @@
   }
 
   /* ================= custom product ================= */
-  function openCustom({ meal, prefill, reason, entry }) {
+  function openCustom({ prefill, reason, entry, standalone }, ctx) {
+    ctx = ctx || {};
     const p = prefill || {};
     const code = /^\d{8,14}$/.test(p.id || '') ? p.id : '';
     const v = (x) => (x == null || x === '' ? '' : fmt1(x));
+    const editing = p.src === 'my';
     const sh = openSheet({
-      title: p.n ? 'Проверь КБЖУ' : 'Свой продукт',
+      title: editing ? 'Мой продукт' : p.n ? 'Проверь КБЖУ' : 'Свой продукт',
       body: `
         ${reason ? `<p class="note">${esc(reason)}</p>` : ''}
         <form class="stack" id="cf" novalidate>
@@ -922,21 +1075,323 @@
         if (c.type !== 'gtin' && c.type !== 'weight') return err('Штрихкод с ошибкой — проверь цифры или оставь поле пустым');
         id = c.value;
       } else {
-        id = p.src === 'my' && p.id ? p.id : 'u' + uid();
+        id = editing && p.id ? p.id : 'u' + uid();
       }
-      const saved = await saveMy({ id, n, b: String(fd.get('b') || '').trim() || undefined, k, p: pr || 0, f: fa || 0, c: ca || 0, q: num(fd.get('q')) || undefined, u: p.u, ug: p.ug, s: p.s });
+      if (editing && p.id && p.id !== id) await deleteMy(p.id);
+      const saved = await saveMy({ id, n, b: String(fd.get('b') || '').trim() || undefined, k, p: pr || 0, f: fa || 0, c: ca || 0, q: num(fd.get('q')) || undefined, u: p.u, ug: p.ug, s: p.s, src: 'my' });
+      if (!saved) return;
       haptic.ok();
       sh.close();
       if (entry) {
         Object.assign(entry, { pid: saved.id, n: saved.n, b: saved.b, k: saved.k, p: saved.p, f: saved.f, c: saved.c });
         await saveDay();
-        render();
         closeAll();
-        toast('КБЖУ исправлено');
-        return;
+        render();
+        return toast('КБЖУ исправлено');
       }
       toast('Продукт сохранён');
-      openProduct(saved, { meal });
+      if (standalone) { if (S.tab === 'dishes') renderDishes(); return; }
+      openProduct(saved, ctx);
+    });
+  }
+
+  /* ================= dishes ================= */
+  function openDish(dish, ctx) {
+    ctx = ctx || {};
+    const st = { ing: dish && dish.ing ? dish.ing.map((x) => Object.assign({}, x)) : [] };
+    const sh = openSheet({
+      title: dish ? 'Блюдо' : 'Новое блюдо',
+      body: `
+        <form class="stack" id="df" novalidate>
+          <label class="fld"><span>Название</span><div class="inp"><input name="n" value="${esc(dish ? dish.n : ctx.name || '')}" placeholder="Например, гречка с курицей" maxlength="40" autocomplete="off"></div></label>
+          <div>
+            <p class="fld-title">Ингредиенты</p>
+            <div id="ingList"></div>
+            <button type="button" class="btn ghost" data-act="ing-add">${ICON.plus}<span>Добавить ингредиент</span></button>
+          </div>
+          <div class="dish-sum" id="dsum"></div>
+          <div class="row2">
+            <label class="fld"><span>Вес готового блюда</span><div class="inp"><input name="cw" inputmode="decimal" value="${dish && dish.cw ? fmt1(dish.cw) : ''}" autocomplete="off"><em>г</em></div></label>
+            <label class="fld"><span>Порций</span><div class="inp"><input name="sv" inputmode="numeric" value="${dish && dish.sv ? dish.sv : ''}" placeholder="—" autocomplete="off"></div></label>
+          </div>
+          <p class="muted small">Крупы и макароны при варке тяжелеют, мясо при жарке становится легче. Взвесь готовое блюдо, и КБЖУ на 100 г посчитаются точно. Если не взвешивать, возьму сумму ингредиентов.</p>
+          <div id="dper"></div>
+          <button type="submit" class="btn primary">${ctx.meal != null ? 'Сохранить и добавить в дневник' : 'Сохранить блюдо'}</button>
+          ${dish ? `<button type="button" class="btn danger" data-act="dish-del">${ICON.trash}<span>Удалить блюдо</span></button>` : ''}
+        </form>`,
+    });
+    const form = $('#df', sh.body);
+    function calc() {
+      const raw = st.ing.reduce((a, x) => a + (x.g || 0), 0);
+      const tot = totals(st.ing);
+      const cw = num(form.cw.value) || raw;
+      const sv = r0(num(form.sv.value)) || 0;
+      return { raw, tot, cw, sv };
+    }
+    function drawIng() {
+      $('#ingList', sh.body).innerHTML = st.ing.length
+        ? st.ing.map((x, i) => `<div class="ing">
+            <span class="res-name">${esc(x.n)}<small data-ik="${i}">${fmt((x.k * x.g) / 100)} ккал</small></span>
+            <div class="inp ing-g"><input data-ig="${i}" inputmode="decimal" value="${fmt1(x.g)}" aria-label="Граммы: ${esc(x.n)}"><em>г</em></div>
+            <button type="button" class="icon-btn" data-ing-del="${i}" aria-label="Убрать ${esc(x.n)}">${ICON.close}</button>
+          </div>`).join('')
+        : '<p class="empty-text">Добавь продукты, из которых состоит блюдо, и сколько грамм каждого.</p>';
+      upd();
+    }
+    function upd() {
+      const { raw, tot, cw, sv } = calc();
+      form.cw.placeholder = raw ? fmt(raw) : '—';
+      $('#dsum', sh.body).innerHTML = st.ing.length ? `
+        <div class="ds-row"><span>Всё блюдо</span><b>${fmt(tot.k)} ккал</b></div>
+        <div class="ds-row small"><span>Б ${fmt1(tot.p)}, Ж ${fmt1(tot.f)}, У ${fmt1(tot.c)}</span><span>${fmt(raw)} г продуктов</span></div>
+        ${sv ? `<div class="ds-row"><span>Порция, ${fmt(cw / sv)} г</span><b>${fmt(tot.k / sv)} ккал</b></div>` : ''}` : '';
+      const per = (v) => (cw ? (v / cw) * 100 : 0);
+      $('#dper', sh.body).innerHTML = st.ing.length ? `
+        <div class="per100">
+          <div><b>${fmt(per(tot.k))}</b><span>ккал</span></div>
+          <div class="p"><b>${fmt1(per(tot.p))}</b><span>белки</span></div>
+          <div class="f"><b>${fmt1(per(tot.f))}</b><span>жиры</span></div>
+          <div class="c"><b>${fmt1(per(tot.c))}</b><span>углеводы</span></div>
+        </div>
+        <p class="per100-note">в 100 г готового блюда</p>` : '';
+    }
+    form.addEventListener('input', (e) => {
+      const i = e.target.dataset.ig;
+      if (i != null) {
+        st.ing[+i].g = num(e.target.value) || 0;
+        const s = $(`[data-ik="${i}"]`, sh.body);
+        if (s) s.textContent = `${fmt((st.ing[+i].k * st.ing[+i].g) / 100)} ккал`;
+      }
+      upd();
+    });
+    sh.body.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.ingDel != null) { st.ing.splice(+b.dataset.ingDel, 1); haptic.tap(); return drawIng(); }
+      if (b.dataset.act === 'ing-add') {
+        return openAdd({
+          base: sh,
+          pick: (prod, g) => {
+            st.ing.push({ n: String(prod.n).slice(0, 40), g, k: r1(prod.k), p: r1(prod.p), f: r1(prod.f), c: r1(prod.c) });
+            closeAbove(sh);
+            drawIng();
+            toast(`Добавлено: ${clip(prod.n, 30)}`);
+          },
+        });
+      }
+      if (b.dataset.act === 'dish-del') {
+        if (!(await confirmBox(`Удалить блюдо «${dish.n}»? Записи в дневнике останутся.`))) return;
+        await deleteMy(dish.id);
+        sh.close();
+        if (S.tab === 'dishes') renderDishes();
+        toast('Блюдо удалено');
+      }
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const n = form.n.value.trim();
+      const { raw, tot, cw, sv } = calc();
+      const err = (msg) => { haptic.err(); toast(msg); };
+      if (!n) return err('Напиши название блюда');
+      if (!st.ing.length) return err('Добавь хотя бы один ингредиент');
+      if (!raw || st.ing.some((x) => !x.g || x.g <= 0)) return err('У каждого ингредиента должен быть вес');
+      if (cw <= 0 || cw > 20000) return err('Вес готового блюда — до 20 кг');
+      if (sv && (sv < 1 || sv > 50)) return err('Порций — от 1 до 50');
+      const per = (v) => (v / cw) * 100;
+      const saved = await saveMy({
+        id: dish ? dish.id : 'd' + uid(), n, src: 'dish',
+        k: per(tot.k), p: per(tot.p), f: per(tot.f), c: per(tot.c),
+        q: r0(cw), s: sv ? r0(cw / sv) : undefined, sv: sv || undefined, cw: num(form.cw.value) ? r0(cw) : undefined,
+        ing: st.ing.map((x) => ({ n: x.n, g: r1(x.g), k: x.k, p: x.p, f: x.f, c: x.c })),
+      });
+      if (!saved) return;
+      haptic.ok();
+      sh.close();
+      toast('Блюдо сохранено');
+      if (ctx.meal != null) return openProduct(saved, { meal: ctx.meal });
+      if (S.tab === 'dishes') renderDishes();
+    });
+    drawIng();
+    if (!dish && !ctx.name) setTimeout(() => { if (!inTG) form.n.focus(); }, 300);
+  }
+
+  async function renderDishes() {
+    view.innerHTML = `
+      <header class="page-head">
+        <h1>Блюда</h1>
+        <p>Собери блюдо из продуктов один раз — потом добавляй его в дневник одним касанием.</p>
+      </header>
+      <button class="btn primary" data-act="new-dish">${ICON.plus}<span>Новое блюдо</span></button>
+      <section class="card" id="dishList"><h2>Мои блюда</h2><p class="muted">Загружаю…</p></section>
+      <section class="card" id="prodList"></section>`;
+    await ensureMy();
+    if (S.tab !== 'dishes') return;
+    const all = Array.from(S.my.values()).sort((a, b) => a.n.localeCompare(b.n, 'ru'));
+    const dishes = all.filter((p) => p.src === 'dish');
+    const prods = all.filter((p) => p.src !== 'dish');
+    $('#dishList').innerHTML = '<h2>Мои блюда</h2>' + (dishes.length
+      ? dishes.map((p) => `<button class="list-row" data-dish="${esc(p.id)}">
+          <span class="res-name">${esc(p.n)}<small>${fmt(p.k)} ккал на 100 г${p.s ? `, порция ${fmt(p.s)} г — ${fmt((p.k * p.s) / 100)} ккал` : ''}</small></span>${ICON.right}
+        </button>`).join('')
+      : '<p class="muted">Пока пусто. Например, овсянка на молоке с бананом: впиши вес каждого продукта, и КБЖУ посчитаются сами.</p>');
+    $('#prodList').innerHTML = '<h2>Мои продукты</h2>' + (prods.length
+      ? prods.map((p) => `<div class="my-row">
+          <button class="list-row" data-prod="${esc(p.id)}"><span class="res-name">${esc(p.n)}<small>${fmt(p.k)} ккал, Б ${fmt1(p.p)}, Ж ${fmt1(p.f)}, У ${fmt1(p.c)} на 100 г</small></span></button>
+          <button class="icon-btn" data-del-prod="${esc(p.id)}" aria-label="Удалить «${esc(p.n)}»">${ICON.trash}</button>
+        </div>`).join('')
+      : '<p class="muted">Здесь появятся продукты, которые ты добавишь с упаковки. Они находятся по скану и в поиске.</p>');
+  }
+
+  /* ================= progress: weight & stats ================= */
+  function weightChart(pts) {
+    const W = 320, H = 120, P = 10;
+    const t0 = parseD(pts[0].d).getTime(), t1 = parseD(pts[pts.length - 1].d).getTime();
+    const ks = pts.map((x) => x.kg);
+    let lo = Math.min(...ks), hi = Math.max(...ks);
+    if (hi - lo < 1) { const mid = (hi + lo) / 2; lo = mid - 0.5; hi = mid + 0.5; }
+    const X = (x) => P + ((parseD(x.d).getTime() - t0) / ((t1 - t0) || 1)) * (W - 2 * P);
+    const Y = (k) => P + (1 - (k - lo) / (hi - lo)) * (H - 2 * P);
+    const d = pts.map((x, i) => `${i ? 'L' : 'M'}${X(x).toFixed(1)} ${Y(x.kg).toFixed(1)}`).join(' ');
+    return `<div class="w8-chart">
+        <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="График веса">
+          <path d="${d}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+          ${pts.map((x, i) => `<circle cx="${X(x).toFixed(1)}" cy="${Y(x.kg).toFixed(1)}" r="${i === pts.length - 1 ? 5 : 3}" fill="currentColor"/>`).join('')}
+        </svg>
+        <span class="w8-hi">${fmt1(hi)}</span><span class="w8-lo">${fmt1(lo)}</span>
+      </div>
+      <div class="w8-dates"><span>${shortDate(pts[0].d)}</span><span>${shortDate(pts[pts.length - 1].d)}</span></div>`;
+  }
+  function weightCardHTML() {
+    const W = S.weights;
+    if (!W.length) {
+      return `<h2>Вес</h2>
+        <p class="muted">Записывай вес раз в день или в неделю. Здесь появится график, и станет видно, работает ли норма.</p>
+        <button class="btn primary" data-act="weight-add">Записать вес</button>`;
+    }
+    const last = W[W.length - 1];
+    const cutoff = addDays(todayStr(), -30);
+    let ref = null;
+    W.forEach((x) => { if (x.d <= cutoff) ref = x; });
+    const span = ref ? 'за 30 дней' : 'с первой записи';
+    ref = ref || W[0];
+    const delta = r1(last.kg - ref.kg);
+    const deltaTxt = W.length > 1 && ref !== last ? `${delta > 0 ? '+' : delta < 0 ? '−' : '±'}${fmt1(Math.abs(delta))} кг ${span}` : '';
+    return `<div class="w8-head">
+        <div>
+          <h2>Вес</h2>
+          <p class="w8-big">${fmt1(last.kg)}<span>кг</span></p>
+          <p class="muted small">${esc(dateLabel(last.d))}${deltaTxt ? `. ${deltaTxt}` : ''}</p>
+        </div>
+        <button class="btn primary sm" data-act="weight-add">Записать</button>
+      </div>
+      ${W.length > 1 ? weightChart(W.slice(-60)) : '<p class="muted small">Добавь ещё одну запись, и появится график.</p>'}`;
+  }
+
+  async function renderProgress() {
+    view.innerHTML = `
+      <header class="page-head"><h1>Прогресс</h1></header>
+      <section class="card weight" id="weightCard">${weightCardHTML()}</section>
+      <div class="period">${segCtl('period', String(S.period), [['7', '7 дней'], ['30', '30 дней']])}</div>
+      <section class="card stats" id="stats"><div class="loading small"><span class="spinner"></span><p>Считаю…</p></div></section>`;
+    const today = todayStr();
+    const days = Array.from({ length: 30 }, (_, i) => addDays(today, i - 29));
+    const vals = await Store.getMany(days.map(dayKey));
+    if (S.tab !== 'progress') return;
+    S.statDays = days.map((d) => {
+      const day = d === S.date ? S.day : parseDay(vals[dayKey(d)]);
+      const t = totals(day.e);
+      return { d, k: t.k, p: t.p, f: t.f, c: t.c, w: day.w || 0, n: day.e.length };
+    });
+    drawStats();
+  }
+
+  function drawStats() {
+    const box = $('#stats');
+    if (!box || !S.statDays) return;
+    const N = S.period;
+    const arr = S.statDays.slice(-N);
+    const g = S.goals;
+    const logged = arr.filter((x) => x.n > 0);
+    const avg = (key) => (logged.length ? logged.reduce((a, x) => a + x[key], 0) / logged.length : 0);
+    const inNormFn = (x) => x.n > 0 && Math.abs(x.k - g.kcal) <= g.kcal * 0.1;
+    const inNorm = logged.filter(inNormFn).length;
+    const all = S.statDays;
+    let i = all.length - 1;
+    if (all[i].n === 0) i--;
+    let streak = 0;
+    for (; i >= 0 && all[i].n > 0; i--) streak++;
+    const waterDays = arr.filter((x) => x.w > 0);
+    const avgW = waterDays.length ? waterDays.reduce((a, x) => a + x.w, 0) / waterDays.length : 0;
+    const max = Math.max(g.kcal * 1.25, ...arr.map((x) => x.k)) || 1;
+    const today = todayStr();
+    const statMac = (key, label, val, goal) => `<div class="mac ${key}">
+        <span class="mac-name">${label}</span>
+        <span class="mac-val"><b>${logged.length ? fmt(val) : '—'}</b> / ${fmt(goal)} г</span>
+        <span class="mac-bar"><i style="width:${goal && logged.length ? Math.min(100, (val / goal) * 100).toFixed(1) : 0}%"></i></span>
+      </div>`;
+    box.innerHTML = `
+      <div class="st-top">
+        <div><span class="muted small">Среднее в день</span><b class="st-big">${logged.length ? fmt(avg('k')) : '—'}</b><span class="muted small">из ${fmt(g.kcal)} ккал</span></div>
+        <div><span class="muted small">В норме, ±10%</span><b class="st-big ok">${inNorm}<small> из ${logged.length}</small></b><span class="muted small">${plural(logged.length, 'дня', 'дней', 'дней')} с записями</span></div>
+      </div>
+      <div class="bars n${N}">
+        <span class="goal-line" style="bottom:${((g.kcal / max) * 100).toFixed(1)}%"></span>
+        ${arr.map((x) => `<button class="bar${x.n === 0 ? ' empty' : inNormFn(x) ? ' ok' : x.k > g.kcal ? ' over' : ''}${x.d === today ? ' cur' : ''}" data-day="${x.d}" aria-label="${esc(dateLabel(x.d))}: ${fmt(x.k)} ккал">
+          <i style="height:${Math.max(x.n ? 3 : 0, (x.k / max) * 100).toFixed(1)}%"></i>
+        </button>`).join('')}
+      </div>
+      <div class="bars-x n${N}">${arr.map((x, j) => `<span>${N === 7 ? parseD(x.d).toLocaleDateString('ru-RU', { weekday: 'short' }) : (j % 5 === 4 || j === 0 ? parseD(x.d).getDate() : '')}</span>`).join('')}</div>
+      <div class="legend"><span class="lg ok">в норме</span><span class="lg over">больше нормы</span><span class="lg under">меньше нормы</span></div>
+      <div class="macros st-macros">${statMac('p', 'Белки', avg('p'), g.p)}${statMac('f', 'Жиры', avg('f'), g.f)}${statMac('c', 'Углеводы', avg('c'), g.c)}</div>
+      <div class="st-row"><span>Записи подряд</span><b>${streak >= 30 ? '30+' : streak} ${plural(streak, 'день', 'дня', 'дней')}</b></div>
+      <div class="st-row water-row"><span>Вода в среднем</span><b>${avgW ? fmtL(avgW) : '—'}</b></div>
+      <p class="muted small">Нажми на столбик, чтобы открыть этот день.</p>`;
+  }
+
+  function openWeight() {
+    const last = S.weights[S.weights.length - 1];
+    const sh = openSheet({
+      title: 'Вес',
+      body: `<form class="stack" id="wf" novalidate>
+          <div class="row2">
+            <label class="fld"><span>Вес</span><div class="inp big"><input name="kg" inputmode="decimal" value="${last ? fmt1(last.kg) : ''}" placeholder="65,5" autocomplete="off"><em>кг</em></div></label>
+            <label class="fld"><span>Дата</span><div class="inp big"><input type="date" name="d" value="${todayStr()}" max="${todayStr()}"></div></label>
+          </div>
+          <button type="submit" class="btn primary">Сохранить</button>
+        </form>
+        <div id="wHist"></div>`,
+    });
+    const form = $('#wf', sh.body);
+    function drawHist() {
+      $('#wHist', sh.body).innerHTML = S.weights.length
+        ? '<h4 class="group">Последние записи</h4>' + S.weights.slice(-8).reverse().map((x) => `<div class="my-row">
+            <span class="res-name">${fmt1(x.kg)} кг<small>${esc(dateLabel(x.d))}</small></span>
+            <button type="button" class="icon-btn" data-del-w="${x.d}" aria-label="Удалить запись">${ICON.trash}</button>
+          </div>`).join('')
+        : '';
+    }
+    drawHist();
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const kg = num(form.kg.value);
+      const d = form.d.value || todayStr();
+      if (!kg || kg < 20 || kg > 400) { haptic.err(); return toast('Вес — от 20 до 400 кг'); }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > todayStr()) { haptic.err(); return toast('Проверь дату'); }
+      S.weights = S.weights.filter((x) => x.d !== d).concat([{ d, kg: r1(kg) }]).sort((a, b) => (a.d < b.d ? -1 : 1));
+      await saveWeights();
+      haptic.ok();
+      sh.close();
+      toast('Вес записан');
+      if (S.tab === 'progress') { const c = $('#weightCard'); if (c) c.innerHTML = weightCardHTML(); }
+    });
+    sh.body.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-del-w]');
+      if (!b) return;
+      S.weights = S.weights.filter((x) => x.d !== b.dataset.delW);
+      await saveWeights();
+      haptic.tap();
+      drawHist();
+      if (S.tab === 'progress') { const c = $('#weightCard'); if (c) c.innerHTML = weightCardHTML(); }
     });
   }
 
@@ -948,14 +1403,14 @@
       if (!sheets.includes(sh)) return;
       sh.close();
       if (prod) openProduct(prod, ctx);
-      else openCustom({ meal: ctx && ctx.meal, prefill: { id: code }, reason: `Продукта ${code} пока нет в базе. Перепиши КБЖУ с упаковки один раз — дальше он будет находиться по скану сразу.` });
+      else openCustom({ prefill: { id: code }, reason: `Продукта ${code} пока нет в базе. Перепиши КБЖУ с упаковки один раз — дальше он будет находиться по скану сразу.` }, ctx);
     } catch (e) {
       if (!sheets.includes(sh)) return;
       sh.body.innerHTML = `<p class="note">Не получилось связаться с базой продуктов. Проверь интернет и попробуй ещё раз.</p>
         <button class="btn primary" data-r>Повторить</button>
         <button class="btn ghost" data-c>Ввести КБЖУ с упаковки</button>`;
       $('[data-r]', sh.body).onclick = () => { sh.close(); lookupCode(code, ctx); };
-      $('[data-c]', sh.body).onclick = () => { sh.close(); openCustom({ meal: ctx && ctx.meal, prefill: { id: code } }); };
+      $('[data-c]', sh.body).onclick = () => { sh.close(); openCustom({ prefill: { id: code } }, ctx); };
     }
   }
 
@@ -1012,7 +1467,6 @@
     scanner.canvas = document.createElement('canvas');
     scanner.cctx = scanner.canvas.getContext('2d', { willReadFrequently: true });
     syncBack();
-
     el.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b) return;
@@ -1029,7 +1483,6 @@
     });
     startCamera();
   }
-
   const setStatus = (msg) => { if (scanner.el) $('.scan-status', scanner.el).textContent = msg; };
 
   async function startCamera() {
@@ -1051,16 +1504,13 @@
     } catch (e) {
       return cameraError(e);
     }
-    try {
-      scanner.detector = await detP;
-    } catch (e) {
+    try { scanner.detector = await detP; } catch (e) {
       return setStatus('Не загрузилось распознавание штрихкодов. Проверь интернет или введи цифры вручную.');
     }
     if (!scanner.active) return;
     setStatus('Наведи камеру на штрихкод');
     tick();
   }
-
   function cameraError(e) {
     const name = e && e.name;
     let msg = 'Камера недоступна. Сфоткай штрихкод или введи цифры под ним.';
@@ -1070,7 +1520,6 @@
     setStatus(msg);
     if (scanner.el) scanner.el.classList.add('no-cam');
   }
-
   async function tick() {
     if (!scanner.active) return;
     const v = scanner.video;
@@ -1090,8 +1539,6 @@
     }
     scanner.timer = setTimeout(tick, 110);
   }
-
-  // returns true if scanning should stop
   function handleDetected(results) {
     for (const r of results) {
       const c = normalizeCode(r.rawValue);
@@ -1102,7 +1549,7 @@
         stopScanner();
         if (c.type === 'weight') {
           toast('Это внутренний код магазина для весового товара. Найди продукт по названию.');
-          openAdd(ctx.meal);
+          if (!sheets.length) openAdd(ctx);
         } else {
           lookupCode(c.value, ctx);
         }
@@ -1117,7 +1564,6 @@
     }
     return false;
   }
-
   async function scanPhoto(file) {
     setStatus('Ищу штрихкод на фото…');
     try {
@@ -1134,14 +1580,12 @@
       setStatus('Не получилось прочитать фото. Попробуй ещё раз или введи цифры.');
     }
   }
-
   async function toggleTorch(btn) {
     const track = scanner.stream && scanner.stream.getVideoTracks()[0];
     if (!track) return;
     scanner.torch = !scanner.torch;
     try { await track.applyConstraints({ advanced: [{ torch: scanner.torch }] }); btn.classList.toggle('on', scanner.torch); } catch (e) { scanner.torch = !scanner.torch; }
   }
-
   function stopScanner() {
     if (!scanner.active) return;
     scanner.active = false;
@@ -1175,20 +1619,16 @@
     });
   }
 
-  /* ================= profile ================= */
-  const segCtl = (name, val, opts) => `<div class="seg" role="radiogroup">
-      <input type="hidden" name="${name}" value="${esc(val)}">
-      ${opts.map(([v, l]) => `<button type="button" role="radio" aria-checked="${v === val}" data-seg="${name}" data-v="${v}" class="${v === val ? 'on' : ''}">${l}</button>`).join('')}
-    </div>`;
-  const field = (name, label, val, mode, unit, cls) => `<label class="fld${cls ? ' ' + cls : ''}"><span>${label}</span><div class="inp"><input name="${name}" inputmode="${mode}" value="${val == null ? '' : esc(fmt1(val))}" autocomplete="off">${unit ? `<em>${unit}</em>` : ''}</div></label>`;
-
+  /* ================= norm (profile) ================= */
   function readProfile(form) {
     const fd = new FormData(form);
+    const wl = num(fd.get('water'));
     return {
       mode: fd.get('mode') || 'manual',
-      sex: fd.get('sex') || 'm', age: num(fd.get('age')), height: num(fd.get('height')), weight: num(fd.get('weight')),
+      sex: fd.get('sex') || 'f', age: num(fd.get('age')), height: num(fd.get('height')), weight: num(fd.get('weight')),
       act: num(fd.get('act')) || 1.375, goal: fd.get('goal') || 'keep',
       kcal: num(fd.get('kcal')), mp: num(fd.get('mp')), mf: num(fd.get('mf')), mc: num(fd.get('mc')),
+      water: wl != null ? Math.round(wl * 1000) : null, glass: num(fd.get('glass')),
     };
   }
   const macroKcal = (o) => (o.mp != null && o.mf != null && o.mc != null ? o.mp * 4 + o.mf * 9 + o.mc * 4 : null);
@@ -1224,23 +1664,25 @@
           ${segCtl('goal', p.goal, Object.keys(GOALS).map((k) => [k, GOALS[k][0]]))}
           <div class="result" id="goalResult"></div>
         </section>
-        <button type="submit" class="btn primary">Сохранить норму</button>
+        <section class="card stack water-set">
+          <h2>Вода</h2>
+          <div class="row2">
+            ${field('water', 'Норма в день', (p.water || 2000) / 1000, 'decimal', 'л')}
+            ${field('glass', 'Мой стакан', p.glass || 250, 'numeric', 'мл')}
+          </div>
+        </section>
+        <button type="submit" class="btn primary">Сохранить</button>
       </form>
       ${homeScreen.status && homeScreen.status !== 'unsupported' ? `<section class="card" id="homeCard">
         <h2>Главный экран телефона</h2>
         <p class="muted">${homeScreen.status === 'added' ? 'Иконка Калорийки уже на главном экране.' : 'Добавь иконку — приложение будет открываться в одно касание, без поиска бота в чатах.'}</p>
-        ${homeScreen.status !== 'added' ? `<button class="btn primary" data-act="home-add">Добавить на главный экран</button>` : ''}
+        ${homeScreen.status !== 'added' ? '<button class="btn primary" data-act="home-add">Добавить на главный экран</button>' : ''}
       </section>` : ''}
-      <section class="card my-products">
-        <h2>Мои продукты</h2>
-        <div id="myList"><p class="muted">Загружаю…</p></div>
-      </section>
       <p class="foot">Состав продуктов по штрихкоду — из открытой базы <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a>. Расчёт по формуле Миффлина — Сан-Жеора — ориентир, а не медицинская рекомендация.</p>`;
 
     const form = $('#pf');
     const result = $('#goalResult');
     const hint = $('#manualHint');
-
     function updManual() {
       const o = readProfile(form);
       const mk = macroKcal(o);
@@ -1249,8 +1691,7 @@
       if (o.kcal == null && mk == null) { hint.textContent = 'Впиши калории. БЖУ можно не заполнять — тогда разделю 30/30/40.'; return; }
       if (o.kcal == null) { hint.textContent = `Калории посчитаю по БЖУ: ${fmt(mk)} ккал.`; return; }
       if (mk != null) {
-        const diff = mk - o.kcal;
-        hint.textContent = Math.abs(diff) > Math.max(50, o.kcal * 0.05)
+        hint.textContent = Math.abs(mk - o.kcal) > Math.max(50, o.kcal * 0.05)
           ? `По белкам, жирам и углеводам выходит ${fmt(mk)} ккал, а не ${fmt(o.kcal)}. Проверь цифры или оставь как есть.`
           : `Сходится: по БЖУ выходит ${fmt(mk)} ккал.`;
         return;
@@ -1261,7 +1702,7 @@
     }
     function updAuto() {
       const o = readProfile(form);
-      if (!bodyValid(o)) { result.innerHTML = `<p class="muted">Заполни возраст, рост и вес — сразу покажу норму.</p>`; return; }
+      if (!bodyValid(o)) { result.innerHTML = '<p class="muted">Заполни возраст, рост и вес — сразу покажу норму.</p>'; return; }
       const g = autoGoals(o);
       result.innerHTML = `<p class="r-title">Получается</p>
         <p class="r-k">${fmt(g.kcal)}<span>ккал в день</span></p>
@@ -1269,22 +1710,18 @@
         <p class="muted small">В покое организм тратит около ${fmt(g.bmr)} ккал, с учётом активности — около ${fmt(g.tdee)}.</p>`;
     }
     const upd = () => { updManual(); updAuto(); };
-
     form.addEventListener('click', (e) => {
       const b = e.target.closest('[data-seg]');
       if (!b) return;
-      const name = b.dataset.seg;
-      $(`input[name=${name}]`, form).value = b.dataset.v;
-      $$(`[data-seg=${name}]`, form).forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
-      if (name === 'mode') {
-        $$('[data-pane]', form).forEach((x) => { x.hidden = x.dataset.pane !== b.dataset.v; });
+      const v = segPick(form, b);
+      if (b.dataset.seg === 'mode') {
+        $$('[data-pane]', form).forEach((x) => { x.hidden = x.dataset.pane !== v; });
         const o = readProfile(form);
-        if (b.dataset.v === 'manual' && o.kcal == null && o.mp == null && bodyValid(o)) {
+        if (v === 'manual' && o.kcal == null && o.mp == null && bodyValid(o)) {
           const g = autoGoals(o);
           form.kcal.value = g.kcal; form.mp.value = g.p; form.mf.value = g.f; form.mc.value = g.c;
         }
       }
-      haptic.tap();
       upd();
     });
     form.addEventListener('input', upd);
@@ -1292,47 +1729,26 @@
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const o = readProfile(form);
+      const err = (msg) => { haptic.err(); toast(msg); };
+      if (o.water == null || o.water < 500 || o.water > 6000) return err('Норма воды — от 0,5 до 6 л');
+      if (!o.glass || o.glass < 50 || o.glass > 1000) return err('Стакан — от 50 до 1000 мл');
       if (o.mode === 'manual') {
         if (o.kcal == null) o.kcal = macroKcal(o);
-        if (!o.kcal || o.kcal < 800 || o.kcal > 6000) { haptic.err(); return toast('Калории — от 800 до 6000 в день'); }
-        if ([o.mp, o.mf, o.mc].some((x) => x != null && (x < 0 || x > 1000))) { haptic.err(); return toast('Проверь белки, жиры и углеводы'); }
-        o.kcal = r0(o.kcal);
+        if (o.kcal != null && (o.kcal < 800 || o.kcal > 6000)) return err('Калории — от 800 до 6000 в день');
+        if ([o.mp, o.mf, o.mc].some((x) => x != null && (x < 0 || x > 1000))) return err('Проверь белки, жиры и углеводы');
+        if (o.kcal != null) o.kcal = r0(o.kcal);
       } else if (!bodyValid(o)) {
-        haptic.err(); return toast('Проверь возраст (14–100), рост (120–230 см) и вес (30–300 кг)');
+        return err('Проверь возраст (14–100), рост (120–230 см) и вес (30–300 кг)');
       }
+      o.glass = r0(o.glass);
       S.profile = o;
       S.goals = calcGoals(o);
       await Store.setJSON('profile', o);
       haptic.ok();
-      toast('Норма сохранена');
-      S.tab = 'diary';
-      render();
-      window.scrollTo(0, 0);
+      toast(S.goals.def ? 'Сохранено. Норма калорий пока по умолчанию — впиши свою' : 'Норма сохранена');
+      goTab('diary');
     });
     upd();
-    renderMyList();
-  }
-
-  async function renderMyList() {
-    await ensureMy();
-    const box = $('#myList');
-    if (!box) return;
-    const list = Array.from(S.my.values()).sort((a, b) => a.n.localeCompare(b.n, 'ru'));
-    if (!list.length) { box.innerHTML = `<p class="muted">Здесь появятся продукты, которые ты добавишь с упаковки. Они находятся по скану и в поиске.</p>`; return; }
-    box.innerHTML = list.map((p) => `<div class="my-row">
-        <span class="res-name">${esc(p.n)}<small>${fmt(p.k)} ккал, Б ${fmt1(p.p)}, Ж ${fmt1(p.f)}, У ${fmt1(p.c)}${/^\d+$/.test(p.id) ? ', код ' + p.id : ''}</small></span>
-        <button class="icon-btn" data-del="${esc(p.id)}" aria-label="Удалить «${esc(p.n)}»">${ICON.trash}</button>
-      </div>`).join('');
-    box.onclick = async (e) => {
-      const b = e.target.closest('[data-del]');
-      if (!b) return;
-      const p = S.my.get(b.dataset.del);
-      if (!p || !(await confirmBox(`Удалить «${p.n}» из твоих продуктов? Записи в дневнике останутся.`))) return;
-      await deleteMy(p.id);
-      S.recent = S.recent.filter((x) => x.id !== p.id);
-      Store.setJSON('recent', S.recent);
-      renderMyList();
-    };
   }
 
   /* ================= tabbar ================= */
@@ -1341,31 +1757,35 @@
     if (!b) return;
     haptic.tap();
     if (b.dataset.tab === 'scan') return openScanner({ meal: defaultMeal() });
-    closeAll();
-    S.tab = b.dataset.tab;
-    render();
-    window.scrollTo(0, 0);
+    goTab(b.dataset.tab);
   });
 
   /* ================= init ================= */
   async function init() {
+    applyTheme();
     if (inTG) {
       try { tg.ready(); tg.expand(); } catch (e) {}
       if (ver('7.7')) { try { tg.disableVerticalSwipes(); } catch (e) {} }
-      if (ver('6.1')) {
-        try { tg.setHeaderColor('secondary_bg_color'); tg.setBackgroundColor('secondary_bg_color'); } catch (e) {}
-        tg.BackButton.onClick(goBack);
-      }
+      if (ver('6.1')) tg.BackButton.onClick(goBack);
+      try { tg.onEvent('themeChanged', applyTheme); } catch (e) {}
       document.documentElement.classList.add('in-tg');
+    } else if (window.matchMedia) {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      if (mq.addEventListener) mq.addEventListener('change', applyTheme);
     }
-    const key = dayKey(S.date);
-    const v = await Store.getMany(['profile', 'recent', 'meals', key]);
+    const k = dayKey(S.date), kp = dayKey(addDays(S.date, -1));
+    const v = await Store.getMany(['profile', 'recent', 'meals', 'weight', k, kp]);
     const meals = parseJSON(v.meals, null);
     if (Array.isArray(meals) && meals.length && meals.every((m) => typeof m.id === 'number' && m.n)) S.meals = meals;
     S.profile = parseJSON(v.profile, null);
     S.goals = calcGoals(S.profile);
     S.recent = parseJSON(v.recent, []) || [];
-    S.entries = parseJSON(v[key], []) || [];
+    S.weights = (parseJSON(v.weight, []) || [])
+      .filter((x) => Array.isArray(x) && /^\d{4}-\d{2}-\d{2}$/.test(x[0]) && +x[1] > 0)
+      .map((x) => ({ d: x[0], kg: +x[1] }))
+      .sort((a, b) => (a.d < b.d ? -1 : 1));
+    S.day = parseDay(v[k]);
+    S.prev = parseDay(v[kp]).e;
     render();
     ensureMy();
     checkHome(() => { if (homeScreen.status !== 'unsupported' && S.tab === 'diary' && !sheets.length) render(); });
