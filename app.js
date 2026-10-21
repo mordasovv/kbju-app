@@ -20,7 +20,13 @@
   const fmt1 = (n) => { const v = r1(n); return (Number.isInteger(v) ? String(v) : v.toFixed(1)).replace('.', ','); };
   const fmtL = (ml) => String(Math.round((ml || 0) / 10) / 100).replace('.', ',') + ' л';
   const fmtMl = (ml) => (Math.abs(ml) >= 1000 ? fmtL(ml) : `${r0(ml)} мл`);
-  const norm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}%]+/gu, ' ').trim();
+  const norm = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е')
+    .replace(/(\d)[,.](\d)/g, '$1.$2')
+    .replace(/[^\p{L}\p{N}%.]+/gu, ' ')
+    .replace(/\.(?!\d)/g, ' ').replace(/(^|[^\d])\./g, '$1 ')
+    .replace(/\s+/g, ' ').trim();
+  const ENDINGS = /(ами|ями|ого|его|ому|ему|ыми|ими|ой|ей|ий|ый|ая|яя|ое|ее|ые|ие|ую|юю|ов|ев|ам|ям|ах|ях|ом|ем|а|я|ы|и|у|ю|е|о|ь)$/;
+  const stem = (w) => { if (w.length <= 3 || /\d/.test(w)) return w; const t = w.replace(ENDINGS, ''); return t.length >= 3 ? t : w; };
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const plural = (n, a, b, c) => { n = Math.abs(n) % 100; const n1 = n % 10; if (n > 10 && n < 20) return c; if (n1 > 1 && n1 < 5) return b; if (n1 === 1) return a; return c; };
   const parseJSON = (s, fb) => { if (!s) return fb; try { return JSON.parse(s); } catch (e) { return fb; } };
@@ -190,9 +196,23 @@
     return a;
   }, { k: 0, p: 0, f: 0, c: 0 });
 
-  const BASE = (window.BASE_FOODS || []).map((x, i) => ({
-    id: 'g' + i, n: x[0], k: x[1], p: x[2], f: x[3], c: x[4], u: x[5], ug: x[6], src: 'base',
-  }));
+  const BASE = (window.BASE_FOODS || []).map((x) => {
+    const o = x.length > 5 && x[x.length - 1] && typeof x[x.length - 1] === 'object' ? x[x.length - 1] : {};
+    return {
+      id: 'g:' + norm(x[0]), n: x[0], k: x[1], p: x[2], f: x[3], c: x[4],
+      u: o.u || (typeof x[5] === 'string' ? x[5] : undefined), ug: o.g || (typeof x[6] === 'number' ? x[6] : undefined),
+      a: o.a, src: 'base',
+    };
+  });
+  const SHARED = window.SHARED_CODES || {};
+  function sharedProduct(code) {
+    const x = SHARED[code];
+    if (!x) return null;
+    const o = x[5] || {};
+    return { id: code, n: x[0], k: x[1], p: x[2], f: x[3], c: x[4], b: o.b, q: o.q, src: 'shared' };
+  }
+  const weightId = (code) => 'w' + code.slice(0, 7);
+  const weightHint = (code) => { const g = parseInt(code.slice(7, 12), 10); return g >= 5 && g <= 5000 ? g : null; };
   const compact = (p) => ({
     id: p.id, n: String(p.n).slice(0, 60), b: p.b ? String(p.b).slice(0, 30) : undefined,
     k: r1(p.k), p: r1(p.p), f: r1(p.f), c: r1(p.c),
@@ -321,8 +341,9 @@
     if (!j || !j.product || j.status === 0 || j.status === 'failure') return null;
     return fromOFF(j.product, code);
   }
-  async function offSearch(q) {
-    const url = `${OFF}/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=30&lc=ru&fields=${OFF_FIELDS}`;
+  async function offSearch(q, ru) {
+    const url = `${OFF}/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=30&lc=ru&sort_by=unique_scans_n&fields=${OFF_FIELDS}`
+      + (ru ? '&tagtype_0=countries&tag_contains_0=contains&tag_0=russia' : '');
     const r = await fetchT(url, 15000);
     if (r.status === 429 || r.status === 503) throw Object.assign(new Error('busy'), { busy: true });
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -336,7 +357,7 @@
   async function findByCode(code) {
     await ensureMy();
     if (S.my.has(code)) return S.my.get(code);
-    return offProduct(code);
+    return sharedProduct(code) || offProduct(code);
   }
 
   /* ================= barcode parsing ================= */
@@ -735,14 +756,20 @@
     const words = nq.split(' ');
     const mine = S.my ? Array.from(S.my.values()) : [];
     const pool = [].concat(mine.filter((p) => p.src === 'dish'), S.recent, mine.filter((p) => p.src !== 'dish'), BASE);
+    const stems = words.map(stem);
     const seen = new Set();
     const out = [];
     pool.forEach((p) => {
-      if (seen.has(p.id) || (noDish && isDish(p))) return;
-      const hay = norm(p.n + ' ' + (p.b || ''));
-      if (!words.every((w) => hay.includes(w))) return;
-      seen.add(p.id);
-      const score = hay.startsWith(nq) ? 0 : (' ' + hay).includes(' ' + words[0]) ? 1 : 2;
+      const key = norm(p.n) + '|' + r0(p.k);
+      if (seen.has(p.id) || seen.has(key) || (noDish && isDish(p))) return;
+      const name = norm(p.n + ' ' + (p.b || ''));
+      const hay = p.a ? name + ' ' + norm(p.a) : name;
+      const hw = hay.split(' ');
+      if (!stems.every((st, i) => hw.some((h) => h.startsWith(st)) || hay.includes(words[i]))) return;
+      seen.add(p.id); seen.add(key);
+      const nw = name.split(' ');
+      const score = (name + ' ').startsWith(nq + ' ') ? 0 : name.startsWith(nq) ? 0.5 : nw[0].startsWith(stems[0]) ? 1
+        : nw.some((h) => h.startsWith(stems[0])) ? 2 : 1.5;
       out.push({ p, score });
     });
     return out.sort((a, b) => a.score - b.score).slice(0, 40).map((x) => x.p);
@@ -756,32 +783,44 @@
     </button>`;
   };
 
-  // ctx: { meal } — добавить в дневник; { pick(prod, grams), base } — выбрать ингредиент для блюда
+  // ctx: { meal } — добавить в дневник; { pick(prod, grams) } — ингредиент для блюда;
+  // ctx.link: { id, code, weight, grams, name, brand } — привязать штрихкод к найденному продукту; ctx.query — стартовый запрос
+  const offCache = new Map();
   function openAdd(ctx) {
     ctx = ctx || {};
     const pick = typeof ctx.pick === 'function';
+    const L = ctx.link || null;
     let m = ctx.meal != null ? ctx.meal : defaultMeal();
-    const cx = () => (pick ? ctx : { meal: m });
+    const cx = () => (pick ? Object.assign({}, ctx, { link: null, query: null }) : { meal: m });
     let picks = [];
     let offResults = null;
     let offState = 'idle';
+    let offTimer = null;
     const notToday = S.date !== todayStr();
+    const linkNote = !L ? '' : L.weight
+      ? 'Это этикетка весового товара магазина. Найди продукт по названию — запомню, и такие же этикетки дальше будут определяться сами.'
+      : L.name
+        ? `Нашёл «${L.name}», но без КБЖУ. Выбери похожий продукт — запомню штрихкод с его КБЖУ. Или перепиши КБЖУ с упаковки.`
+        : `Штрихкода ${L.code} нет в открытой базе. Найди продукт по названию — например, «молоко 3,2» — запомню штрихкод, и в следующий раз он найдётся сразу.`;
     const sh = openSheet({
-      title: pick ? 'Ингредиент' : notToday ? `Добавить: ${dateLabel(S.date).toLowerCase()}` : 'Добавить',
+      title: L ? (L.weight ? 'Весовой товар' : 'Нет в базе') : pick ? 'Ингредиент' : notToday ? `Добавить: ${dateLabel(S.date).toLowerCase()}` : 'Добавить',
       body: `
+        ${L ? `<p class="note link-note">${esc(linkNote)}</p>` : ''}
         ${pick ? '' : mealChips(m)}
         <form class="search" role="search">
-          <input type="search" id="q" placeholder="Гречка, творог или цифры штрихкода" autocomplete="off" enterkeyhint="search">
-          <button type="button" class="icon-btn accent" data-act="scan" aria-label="Сканировать штрихкод">${ICON.scan}</button>
+          <input type="search" id="q" placeholder="${L ? 'Например, молоко 3,2 или хурма' : 'Гречка, творог или цифры штрихкода'}" autocomplete="off" enterkeyhint="search" value="${esc(ctx.query || '')}">
+          ${L ? '' : `<button type="button" class="icon-btn accent" data-act="scan" aria-label="Сканировать штрихкод">${ICON.scan}</button>`}
         </form>
-        <div class="add-actions${pick ? ' one' : ''}">
-          ${pick ? '' : '<button class="btn ghost" data-act="quick">Ккал и БЖУ</button><button class="btn ghost" data-act="dish">Новое блюдо</button>'}
-          <button class="btn ghost" data-act="custom">Свой продукт</button>
+        <div class="add-actions${pick || L ? ' one' : ''}">
+          ${L ? '<button class="btn ghost" data-act="custom">Переписать КБЖУ с упаковки</button>'
+            : (pick ? '' : '<button class="btn ghost" data-act="quick">Ккал и БЖУ</button><button class="btn ghost" data-act="dish">Новое блюдо</button>') + '<button class="btn ghost" data-act="custom">Свой продукт</button>'}
         </div>
         <div id="results"></div>`,
     });
+    sh.onClose = () => clearTimeout(offTimer);
     const input = $('#q', sh.body);
     const results = $('#results', sh.body);
+    const isCode = (q) => /^\d{8,14}$/.test(q.replace(/\s/g, ''));
 
     function draw() {
       const q = input.value.trim();
@@ -794,49 +833,74 @@
       };
       const mine = S.my ? Array.from(S.my.values()) : [];
       if (!q) {
-        if (!pick) group('Мои блюда', mine.filter((p) => p.src === 'dish').slice(0, 20));
-        group('Недавние', S.recent.filter((p) => !(pick && isDish(p))).slice(0, 12));
+        if (!pick && !L) group('Мои блюда', mine.filter((p) => p.src === 'dish').slice(0, 20));
+        group('Недавние', S.recent.filter((p) => !((pick || L) && isDish(p))).slice(0, 12));
         group('Мои продукты', mine.filter((p) => p.src !== 'dish').slice(0, 30));
-        if (!picks.length) html += `<p class="empty-text">Начни вводить название или отсканируй штрихкод на упаковке.</p>`;
+        if (!picks.length) html += `<p class="empty-text">${L ? 'Начни вводить название продукта.' : 'Начни вводить название или отсканируй штрихкод на упаковке.'}</p>`;
+      } else if (isCode(q) && !L) {
+        html += `<button class="btn primary" data-act="code">${ICON.search}<span>Найти по штрихкоду ${esc(q.replace(/\s/g, ''))}</span></button>`;
       } else {
-        const digits = q.replace(/\s/g, '');
-        if (/^\d{8,14}$/.test(digits)) {
-          html += `<button class="btn primary" data-act="code">${ICON.search}<span>Найти по штрихкоду ${esc(digits)}</span></button>`;
-        } else {
-          group('Найдено', localSearch(q, pick));
-          if (offState === 'loading') html += `<div class="loading small"><span class="spinner"></span><p>Ищу в базе магазинов…</p></div>`;
-          else if (offState === 'done') {
-            if (offResults && offResults.length) group('Из магазинов', offResults);
-            else html += `<p class="empty-text">В базе магазинов ничего не нашлось. Добавь продукт сам — займёт полминуты.</p>`;
-          } else if (offState === 'error') html += `<p class="empty-text">${esc(offResults)}</p><button class="btn ghost" data-act="off">Повторить поиск</button>`;
-          else html += `<button class="btn ghost" data-act="off">${ICON.search}<span>Искать «${esc(clip(q, 24))}» в базе магазинов</span></button>`;
-        }
+        const local = localSearch(q, pick || !!L);
+        group('Найдено', local);
+        if (offState === 'wait' || offState === 'loading') html += `<div class="loading small"><span class="spinner"></span><p>Ищу в базе магазинов…</p></div>`;
+        else if (offState === 'done') {
+          if (offResults && offResults.length) group('Из магазинов', offResults);
+          else if (!local.length) html += `<p class="empty-text">Ничего не нашлось. Попробуй короче, например «${esc(clip(q.split(' ')[0], 20))}», или ${L ? 'перепиши КБЖУ с упаковки' : 'добавь продукт сам'} — займёт полминуты.</p>`;
+        } else if (offState === 'error') html += `<p class="empty-text">${esc(offResults)}</p><button class="btn ghost" data-act="off">Повторить поиск в базе магазинов</button>`;
+        else if (q.length >= 2) html += `<button class="btn ghost" data-act="off">${ICON.search}<span>Искать «${esc(clip(q, 24))}» в базе магазинов</span></button>`;
       }
       results.innerHTML = html;
     }
+    function scheduleOff() {
+      clearTimeout(offTimer);
+      const q = input.value.trim();
+      if (q.length < 3 || isCode(q)) return;
+      if (offCache.has(q)) { offResults = offCache.get(q); offState = 'done'; return; }
+      offState = 'wait';
+      offTimer = setTimeout(runOff, 800);
+    }
     async function runOff() {
+      clearTimeout(offTimer);
       const q = input.value.trim();
       if (q.length < 2) return;
+      if (offCache.has(q)) { offResults = offCache.get(q); offState = 'done'; return draw(); }
       offState = 'loading'; draw();
-      try { offResults = await offSearch(q); offState = 'done'; } catch (err) {
+      try {
+        let res = await offSearch(q, true);
+        if (!res.length) res = await offSearch(q, false);
+        offCache.set(q, res);
+        if (input.value.trim() !== q) return;
+        offResults = res; offState = 'done';
+      } catch (err) {
+        if (input.value.trim() !== q) return;
         offState = 'error';
-        offResults = err && err.busy ? 'База магазинов перегружена. Подожди минуту и повтори.' : 'Не получилось связаться с базой. Проверь интернет.';
+        offResults = err && err.busy ? 'База магазинов перегружена. Подожди минуту и повтори.' : 'Не получилось связаться с базой магазинов. Проверь интернет.';
       }
-      if (input.value.trim() === q) draw();
+      draw();
     }
     function codeFromInput(digits) {
       const c = normalizeCode(digits);
       if (c.type === 'bad') { haptic.err(); return toast('В коде ошибка — проверь цифры под штрихкодом'); }
-      if (c.type === 'weight') return toast('Это внутренний код магазина для весового товара. Найди продукт по названию.');
+      if (c.type === 'weight') return lookupWeight(c.value, cx());
       lookupCode(c.value, cx());
+    }
+    async function linkPick(p) {
+      const saved = await saveMy({
+        id: L.id, n: L.name || p.n, b: L.brand || (p.src === 'base' ? undefined : p.b),
+        k: p.k, p: p.p, f: p.f, c: p.c, u: p.u, ug: p.ug, s: p.s, q: L.weight ? undefined : (L.q || p.q), src: 'my',
+      });
+      if (!saved) return;
+      haptic.ok();
+      toast(L.weight ? 'Запомнил эту этикетку' : 'Запомнил штрихкод');
+      openProduct(saved, Object.assign(cx(), { grams: L.grams }));
     }
     const typed = () => (/^\d+$/.test(input.value.trim()) ? '' : input.value.trim());
 
-    input.addEventListener('input', () => { offState = 'idle'; offResults = null; draw(); });
+    input.addEventListener('input', () => { offState = 'idle'; offResults = null; scheduleOff(); draw(); });
     $('form', sh.body).addEventListener('submit', (e) => {
       e.preventDefault();
       const digits = input.value.replace(/\s/g, '');
-      if (/^\d{8,14}$/.test(digits)) return codeFromInput(digits);
+      if (isCode(digits) && !L) return codeFromInput(digits);
       input.blur();
       runOff();
     });
@@ -844,19 +908,28 @@
       const el = e.target.closest('button');
       if (!el) return;
       if (el.dataset.meal != null) { m = +el.dataset.meal; selectChip(sh.body, 'meal', m); return haptic.tap(); }
-      if (el.dataset.pick != null) { const p = picks[+el.dataset.pick]; if (p) openProduct(fullProd(p), cx()); return; }
+      if (el.dataset.pick != null) {
+        const p = picks[+el.dataset.pick];
+        if (!p) return;
+        if (L) return linkPick(fullProd(p));
+        return openProduct(fullProd(p), cx());
+      }
       const act = el.dataset.act;
       if (act === 'scan') return openScanner(cx());
-      if (act === 'custom') return openCustom({ prefill: { n: typed() } }, cx());
+      if (act === 'custom') {
+        if (L) return openCustom({ prefill: { id: L.weight ? '' : L.code, n: L.name || typed(), b: L.brand }, linkId: L.id, grams: L.grams }, cx());
+        return openCustom({ prefill: { n: typed() } }, cx());
+      }
       if (act === 'quick') return openQuick({ meal: m, name: typed() });
       if (act === 'dish') return openDish(null, { meal: m, name: typed() });
       if (act === 'off') return runOff();
       if (act === 'code') return codeFromInput(input.value.replace(/\s/g, ''));
     });
 
+    if (ctx.query) scheduleOff();
     draw();
     if (!S.my) ensureMy().then(() => { if (!input.value.trim()) draw(); });
-    if (!inTG) setTimeout(() => input.focus(), 300);
+    if (!inTG || L) setTimeout(() => input.focus(), 350);
   }
 
   /* ================= product card ================= */
@@ -864,6 +937,14 @@
     ctx = ctx || {};
     const pick = typeof ctx.pick === 'function';
     if (prod.k == null) {
+      if (/^\d{8,14}$/.test(prod.id || '')) {
+        const pct = (String(prod.n).match(/\d+[,.]?\d*\s?%/) || [''])[0].replace(/\s/g, '');
+        const first = String(prod.n).split(/[\s,]+/)[0] || '';
+        return openAdd(Object.assign({}, ctx, {
+          link: { id: prod.id, code: prod.id, name: prod.n !== 'Без названия' ? prod.n : '', brand: prod.b, q: prod.q },
+          query: prod.n !== 'Без названия' ? (first + (pct ? ' ' + pct : '')).trim() : '',
+        }));
+      }
       return openCustom({ prefill: prod, reason: 'В базе нет КБЖУ для этого продукта. Перепиши с упаковки — сохраню, и в следующий раз он найдётся по скану сразу.' }, ctx);
     }
     const entry = ctx.entry;
@@ -872,6 +953,7 @@
     const grams = entry ? entry.g : prod.ug ? prod.ug : dish && prod.s ? prod.s : prod.q && prod.q <= 120 ? prod.q : prod.s ? prod.s : 100;
 
     const portions = [];
+    if (ctx.grams) portions.push([ctx.grams, 'С этикетки']);
     if (prod.ug && prod.u) portions.push([prod.ug, `1 ${prod.u}`]);
     if (prod.s) portions.push([prod.s, 'Порция']);
     if (prod.q) portions.push([prod.q, dish ? 'Всё блюдо' : 'Вся упаковка']);
@@ -1027,7 +1109,7 @@
   }
 
   /* ================= custom product ================= */
-  function openCustom({ prefill, reason, entry, standalone }, ctx) {
+  function openCustom({ prefill, reason, entry, standalone, linkId, grams }, ctx) {
     ctx = ctx || {};
     const p = prefill || {};
     const code = /^\d{8,14}$/.test(p.id || '') ? p.id : '';
@@ -1073,9 +1155,9 @@
       if (codeIn) {
         const c = normalizeCode(codeIn);
         if (c.type !== 'gtin' && c.type !== 'weight') return err('Штрихкод с ошибкой — проверь цифры или оставь поле пустым');
-        id = c.value;
+        id = c.type === 'weight' ? weightId(c.value) : c.value;
       } else {
-        id = editing && p.id ? p.id : 'u' + uid();
+        id = linkId || (editing && p.id ? p.id : 'u' + uid());
       }
       if (editing && p.id && p.id !== id) await deleteMy(p.id);
       const saved = await saveMy({ id, n, b: String(fd.get('b') || '').trim() || undefined, k, p: pr || 0, f: fa || 0, c: ca || 0, q: num(fd.get('q')) || undefined, u: p.u, ug: p.ug, s: p.s, src: 'my' });
@@ -1091,7 +1173,7 @@
       }
       toast('Продукт сохранён');
       if (standalone) { if (S.tab === 'dishes') renderDishes(); return; }
-      openProduct(saved, ctx);
+      openProduct(saved, grams ? Object.assign({}, ctx, { grams }) : ctx);
     });
   }
 
@@ -1403,7 +1485,7 @@
       if (!sheets.includes(sh)) return;
       sh.close();
       if (prod) openProduct(prod, ctx);
-      else openCustom({ prefill: { id: code }, reason: `Продукта ${code} пока нет в базе. Перепиши КБЖУ с упаковки один раз — дальше он будет находиться по скану сразу.` }, ctx);
+      else openAdd(Object.assign({}, ctx, { link: { id: code, code } }));
     } catch (e) {
       if (!sheets.includes(sh)) return;
       sh.body.innerHTML = `<p class="note">Не получилось связаться с базой продуктов. Проверь интернет и попробуй ещё раз.</p>
@@ -1412,6 +1494,15 @@
       $('[data-r]', sh.body).onclick = () => { sh.close(); lookupCode(code, ctx); };
       $('[data-c]', sh.body).onclick = () => { sh.close(); openCustom({ prefill: { id: code } }, ctx); };
     }
+  }
+
+  async function lookupWeight(code, ctx) {
+    await ensureMy();
+    const id = weightId(code);
+    const grams = weightHint(code);
+    const known = S.my.get(id);
+    if (known) return openProduct(known, Object.assign({}, ctx, { grams }));
+    openAdd(Object.assign({}, ctx, { link: { id, code, weight: true, grams } }));
   }
 
   /* ================= scanner ================= */
@@ -1547,12 +1638,8 @@
         if (navigator.vibrate) { try { navigator.vibrate(40); } catch (e) {} }
         const ctx = scanner.ctx;
         stopScanner();
-        if (c.type === 'weight') {
-          toast('Это внутренний код магазина для весового товара. Найди продукт по названию.');
-          if (!sheets.length) openAdd(ctx);
-        } else {
-          lookupCode(c.value, ctx);
-        }
+        if (c.type === 'weight') lookupWeight(c.value, ctx);
+        else lookupCode(c.value, ctx);
         return true;
       }
     }
@@ -1613,8 +1700,8 @@
       e.preventDefault();
       const c = normalizeCode(input.value.replace(/\s/g, ''));
       if (c.type === 'gtin') { sh.close(); return lookupCode(c.value, ctx); }
+      if (c.type === 'weight') { sh.close(); return lookupWeight(c.value, ctx); }
       haptic.err();
-      if (c.type === 'weight') return toast('Это код весового товара магазина — найди продукт по названию');
       toast('В коде ошибка — проверь цифры');
     });
   }

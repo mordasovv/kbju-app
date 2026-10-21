@@ -497,3 +497,6 @@ input[type="date"] { min-width: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---------- v5: barcode linking ---------- */
+.link-note { margin-top: 2px; color: var(--text); }
